@@ -57,15 +57,15 @@
 # persist token is saved to ~/.local/share/stream-window.token and all
 # later runs skip the dialog entirely.
 #
-# Server-doc defaults: 2500 kbps (the max), 24 fps, scaled to fit
-# 1920x1440, x264 veryfast, GOP = 2*fps, bframes=0, rtmp2sink, '/'.
+# Server-doc defaults: 1800 kbps (<= 2500 max), 24 fps, scaled to fit
+# 1280x720, x264 veryfast, GOP = 2*fps, bframes=0, rtmp2sink, '/'.
 #
 # Tray: while streaming, ~/.config/argos/stream.r.2s.sh shows the active
 # profile from $XDG_RUNTIME_DIR/stream-window.state.
 #
 # Stop: kill $(cat /run/user/1000/stream-window.pid)
 
-VERSION="0.1.3"
+VERSION="0.1.4"
 
 set -euo pipefail
 
@@ -121,9 +121,9 @@ if [ ! -f "$CFG_DIR/profiles.ini" ]; then
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
 #   scale          fit video into "W H" box, aspect kept, no upscale
-#                  (default: 1920 1440; 'off' streams the cropped size)
+#                  (default: 1280 720; 'off' streams the cropped size)
 #   fps            frames per second (default: 24, server max)
-#   bitrate        kbps, recommended <= 2500 (default: 2500)
+#   bitrate        kbps, recommended <= 2500 (default: 1800)
 #   trailing_slash append '/' to url (default: 1 — server requires it;
 #                  never applied to '?' URLs)
 #   watch_proc     pgrep -f ERE pattern; stream exits when nothing matches
@@ -141,9 +141,9 @@ if [ ! -f "$CFG_DIR/profiles.ini" ]; then
 
 [DEFAULT]
 crop = 1150 220 2686 1938
-scale = 1920 1440
+scale = 1280 720
 fps = 24
-bitrate = 2500
+bitrate = 1800
 trailing_slash = 1
 watch_proc = screenrec$
 require_proc = themis
@@ -337,9 +337,9 @@ HEADER = """# stream-window profiles — one [section] per profile.
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
 #   scale          fit video into "W H" box, aspect kept, no upscale
-#                  (default: 1920 1440; 'off' streams the cropped size)
+#                  (default: 1280 720; 'off' streams the cropped size)
 #   fps            frames per second (default: 24, server max)
-#   bitrate        kbps, recommended <= 2500 (default: 2500)
+#   bitrate        kbps, recommended <= 2500 (default: 1800)
 #   trailing_slash append '/' to url (default: 1 — server requires it;
 #                  never applied to '?' URLs)
 #   watch_proc     pgrep -f ERE pattern; stream exits when nothing matches
@@ -820,6 +820,13 @@ if [ "$ALL" = 1 ]; then
     rm -f "$HOME/.config/argos/stream.r.2s.sh"
     rm -f "$HOME/.local/bin/stream-window" "$HOME/.local/bin/stream-profiles-edit"
     rm -f "$HOME/.local/bin/stream-reset"
+    pkill -f 'stream\.r\.2s\.sh' 2>/dev/null
+    # deleting the file isn't enough — argos keeps the tray entry until
+    # the extension rescans; disable+enable forces it (other widgets return)
+    for ext in $(gnome-extensions list 2>/dev/null | grep -i argos); do
+        gnome-extensions disable "$ext" 2>/dev/null
+        gnome-extensions enable "$ext" 2>/dev/null
+    done
     t done_all
 else
     echo "[5/5] $(t done_soft)"
@@ -879,8 +886,8 @@ TOKEN_FILE = os.path.expanduser("~/.local/share/stream-window.token")
 STATE_FILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"),
                           "stream-window.state")
 DEF_FPS = 24
-DEF_SCALE = (1920, 1440)      # fit-inside box; scale=off streams as-is
-DEF_BITRATE = 2500            # server doc: recommended <= 2500
+DEF_SCALE = (1280, 720)       # fit-inside box; scale=off streams as-is
+DEF_BITRATE = 1800            # server doc: recommended <= 2500
 DEF_OSD_FONT = "Sans 16"
 
 # UI language: STREAM_LANG env > ~/.config/stream-window/lang > uk
