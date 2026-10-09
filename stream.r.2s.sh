@@ -6,6 +6,7 @@ RTD="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 STATE="$RTD/stream-window.state"
 PROFILES="${STREAM_PROFILES:-$HOME/.config/stream-window/profiles.ini}"
 EDIT="$HOME/.local/bin/stream-profiles-edit"
+VER=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$HOME/.local/bin/stream-window" 2>/dev/null | head -1)
 
 if [ -s "$STATE" ]; then
     echo "● STREAM: $(cat "$STATE") | color=#ff3333 font=monospace"
@@ -23,3 +24,4 @@ else
     fi
 fi
 [ -x "$EDIT" ] && echo "Edit profiles… | bash='$EDIT' terminal=false"
+[ -n "$VER" ] && echo "stream-window v$VER | font=monospace size=10 color=#888888 href=https://github.com/gruz/strumok"

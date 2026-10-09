@@ -12,6 +12,7 @@
 #   stream-window <rtmp-url> [x y w h] [kbps]  ad-hoc stream
 #   stream-window --list                       list configured profiles
 #   stream-window --edit                       open the GTK profile editor
+#   stream-window --version                    print version
 #
 # Self-contained: on every run, missing support files are (re)installed
 # into ~/.local/bin and ~/.config — the profiles.ini template, the argos
@@ -55,6 +56,8 @@
 #
 # Stop: kill $(cat /run/user/1000/stream-window.pid)
 
+VERSION="0.1.0"
+
 set -euo pipefail
 
 # --- self-install support files (only when missing) -----------------------
@@ -72,10 +75,10 @@ if [ ! -f "$CFG_DIR/profiles.ini" ]; then
 # Keys:
 #   url            (required per profile) rtmp(s):// publish URL
 #   OSD text       the profile name itself (spaces allowed)
-#   osd_font       Pango font (default: Sans Bold 40)
-#   osd_color      text color (default: white)
-#   osd_outline    outline color (default: black; 'transparent' disables)
-#   osd_outline_width  outline thickness px (default: 0 = thin built-in)
+#   osd_font       Pango font (default: Sans 16)
+#   osd_color      text color (default: #FFFFFF22)
+#   osd_outline    outline color (default: transparent = disabled)
+#   osd_outline_width  outline thickness px (default: 1)
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
 #   bitrate        kbps, recommended <= 2500 (default: 1800)
@@ -96,16 +99,16 @@ crop = 1150 220 2686 1938
 bitrate = 1800
 watch_proc = screenrec$
 encoder = auto
-osd_font = Sans Bold 40
-osd_color = white
-osd_outline = black
-osd_outline_width = 0
+osd_font = Sans 16
+osd_color = #FFFFFF55
+osd_outline = transparent
+osd_outline_width = 1
 osd_xpad = 48
-osd_ypad = 36
+osd_ypad = 1800
 
-# Example profiles — set your real URLs (profile name = OSD text):
-[demo]
-url = rtmps://example.com/live/CHANGE_ME
+# Add profiles below — one [section] each (name = OSD text):
+# [my stream]
+# url = rtmps://host/app/STREAM_KEY
 INI_EOF
     echo "installed $CFG_DIR/profiles.ini" >&2
 fi
@@ -121,6 +124,7 @@ RTD="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 STATE="$RTD/stream-window.state"
 PROFILES="${STREAM_PROFILES:-$HOME/.config/stream-window/profiles.ini}"
 EDIT="$HOME/.local/bin/stream-profiles-edit"
+VER=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$HOME/.local/bin/stream-window" 2>/dev/null | head -1)
 
 if [ -s "$STATE" ]; then
     echo "● STREAM: $(cat "$STATE") | color=#ff3333 font=monospace"
@@ -138,6 +142,7 @@ else
     fi
 fi
 [ -x "$EDIT" ] && echo "Edit profiles… | bash='$EDIT' terminal=false"
+[ -n "$VER" ] && echo "stream-window v$VER | font=monospace size=10 color=#888888 href=https://github.com/gruz/strumok"
 ARGOS_EOF
     chmod +x "$ARGOS"
     echo "installed $ARGOS (tray widget)" >&2
@@ -174,10 +179,10 @@ HEADER = """# stream-window profiles — one [section] per profile.
 # Keys:
 #   url            (required per profile) rtmp(s):// publish URL
 #   osd            text drawn on the stream (default: profile name in CAPS)
-#   osd_font       Pango font (default: Sans Bold 40)
-#   osd_color      text color (default: white)
-#   osd_outline    outline color (default: black; 'transparent' disables)
-#   osd_outline_width  outline thickness px (default: 0 = thin built-in)
+#   osd_font       Pango font (default: Sans 16)
+#   osd_color      text color (default: #FFFFFF22)
+#   osd_outline    outline color (default: transparent = disabled)
+#   osd_outline_width  outline thickness px (default: 1)
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
 #   bitrate        kbps, recommended <= 2500 (default: 1800)
@@ -207,10 +212,10 @@ ADV_FIELDS = [
 FIELDS = [("url", "RTMP URL")] + ADV_FIELDS
 
 
-class Editor(Gtk.Window):
-    def __init__(self):
-        super().__init__(title="Stream profiles")
-        self.set_default_size(640, 460)
+class Editor(Gtk.ApplicationWindow):
+    def __init__(self, **kwargs):
+        super().__init__(title="Stream profiles", **kwargs)
+        self.set_default_size(920, 460)
         self.set_border_width(8)
         self.dirty = False
         self.current = None
@@ -258,18 +263,20 @@ class Editor(Gtk.Window):
         top = Gtk.Grid(column_spacing=8, row_spacing=6)
         top.attach(Gtk.Label(label="Name", xalign=0), 0, 0, 1, 1)
         self.name_entry = Gtk.Entry()
+        self.name_entry.set_hexpand(True)
         self.name_entry.set_placeholder_text("profile name = OSD text")
         self.name_entry.connect("changed", self.on_rename)
         top.attach(self.name_entry, 1, 0, 1, 1)
         self.url_label = Gtk.Label(label="RTMP URL", xalign=0)
         top.attach(self.url_label, 0, 1, 1, 1)
         ue = Gtk.Entry()
+        ue.set_hexpand(True)
         ue.connect("changed", self.on_change)
         top.attach(ue, 1, 1, 1, 1)
         self.entries["url"] = ue
         top.attach(Gtk.Label(label="(name is drawn as the OSD text)",
                              xalign=0), 0, 2, 2, 1)
-        right.pack_start(top, False, False, 0)
+        right.pack_start(top, False, True, 0)
 
         self.exp = exp = Gtk.Expander(label="Advanced")
         exp.set_expanded(False)
@@ -285,10 +292,15 @@ class Editor(Gtk.Window):
         exp.add(grid)
         right.pack_start(exp, True, True, 0)
 
+        bbar = Gtk.Box(spacing=6)
         bsave = Gtk.Button(label="Save")
         bsave.get_style_context().add_class("suggested-action")
         bsave.connect("clicked", self.on_save)
-        right.pack_end(bsave, False, False, 0)
+        bsavec = Gtk.Button(label="Save and close")
+        bsavec.connect("clicked", self.on_save_close)
+        bbar.pack_start(bsave, True, True, 0)
+        bbar.pack_start(bsavec, True, True, 0)
+        right.pack_end(bbar, False, False, 0)
         self.status = Gtk.Label(label="", xalign=0)
         right.pack_end(self.status, False, False, 0)
         paned.pack2(right, True, False)
@@ -400,6 +412,10 @@ class Editor(Gtk.Window):
         self.dirty = False
         self.status.set_text(f"saved {INI}")
 
+    def on_save_close(self, *_):
+        self.on_save()
+        self.close()
+
 
 def apply_system_theme():
     """Use the dark GTK variant when GNOME prefers dark style."""
@@ -418,9 +434,20 @@ def apply_system_theme():
 
 
 apply_system_theme()
-win = Editor()
-win.connect("destroy", Gtk.main_quit)
-Gtk.main()
+
+app = Gtk.Application(application_id="strumok.profiles.edit")
+
+
+def on_activate(a):
+    w = a.get_active_window()
+    if w:
+        w.present()                  # editor already open: raise it
+    else:
+        Editor(application=a).present()
+
+
+app.connect("activate", on_activate)
+app.run()
 PYEOF
 EDIT_EOF
     chmod +x "$BIN_DIR/stream-profiles-edit"
@@ -498,12 +525,20 @@ fi
 PIDFILE="${XDG_RUNTIME_DIR:-/tmp}/stream-window.pid"
 case "${1:-}" in
     --edit) exec "$BIN_DIR/stream-profiles-edit" ;;
+    --version|-V) echo "stream-window $VERSION"; exit 0 ;;
 esac
 case "${1:-}" in
     ""|-h|--help|--list) ;;          # python handles these
     *)
         if [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+            cur=$(tr '\0' '\n' < "/proc/$(cat "$PIDFILE")/cmdline" 2>/dev/null | tail -1)
             echo "already running (pid $(cat "$PIDFILE")) — stop with: kill \$(cat $PIDFILE)" >&2
+            gdbus call --session --dest org.freedesktop.Notifications \
+                --object-path /org/freedesktop/Notifications \
+                --method org.freedesktop.Notifications.Notify \
+                "stream-window" 0 "dialog-warning" "stream-window" \
+                "not started — '${cur:-?}' is already running" "[]" "{}" 8000 \
+                >/dev/null 2>&1 || true
             exit 1
         fi
         echo $$ > "$PIDFILE"
@@ -534,7 +569,7 @@ STATE_FILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"),
 FPS = 24
 KEY_INT = FPS * 2
 DEF_BITRATE = 1800            # server doc: recommended <= 2500
-DEF_OSD_FONT = "Sans Bold 40"
+DEF_OSD_FONT = "Sans 16"
 
 NAMED_COLORS = {
     "white": "FFFFFFFF", "black": "FF000000", "red": "FFFF0000",
@@ -608,11 +643,11 @@ if ARGS[0].startswith(("rtmp://", "rtmps://")):
     BITRATE = int(ARGS[5]) if len(ARGS) > 5 else DEF_BITRATE
     OSD = os.environ.get("OSD", "")
     OSD_FONT = os.environ.get("OSD_FONT", DEF_OSD_FONT)
-    OSD_COLOR = parse_color(os.environ.get("OSD_COLOR", "white"))
-    OSD_OUTLINE = parse_color(os.environ.get("OSD_OUTLINE", "black"))
+    OSD_COLOR = parse_color(os.environ.get("OSD_COLOR", "#FFFFFF22"))
+    OSD_OUTLINE = parse_color(os.environ.get("OSD_OUTLINE", "transparent"))
     OSD_XPAD = os.environ.get("OSD_XPAD", "48")
     OSD_YPAD = os.environ.get("OSD_YPAD", "36")
-    OSD_OUTLINE_W = int(os.environ.get("OSD_OUTLINE_WIDTH", "0"))
+    OSD_OUTLINE_W = int(os.environ.get("OSD_OUTLINE_WIDTH", "1"))
 else:
     PROFILE = ARGS[0]
     p = load_profile(PROFILE)   # [DEFAULT] values apply automatically
@@ -623,11 +658,11 @@ else:
     BITRATE = int(p.get("bitrate", DEF_BITRATE))
     OSD = PROFILE                    # OSD text is the profile name
     OSD_FONT = p.get("osd_font", DEF_OSD_FONT)
-    OSD_COLOR = parse_color(p.get("osd_color", "white"))
-    OSD_OUTLINE = parse_color(p.get("osd_outline", "black"))
+    OSD_COLOR = parse_color(p.get("osd_color", "#FFFFFF22"))
+    OSD_OUTLINE = parse_color(p.get("osd_outline", "transparent"))
     OSD_XPAD = p.get("osd_xpad", "48")
     OSD_YPAD = p.get("osd_ypad", "36")
-    OSD_OUTLINE_W = int(p.get("osd_outline_width", "0"))
+    OSD_OUTLINE_W = int(p.get("osd_outline_width", "1"))
     WATCH_PROC = WATCH_PROC or p.get("watch_proc", "")
     REQUIRE_PROC = REQUIRE_PROC or p.get("require_proc", "")
     START_CMD = START_CMD or p.get("start_cmd", "")
@@ -796,23 +831,70 @@ def launch_gst(node_id, crop, win_size):
     print(f"profile: {PROFILE}  encoder: {enc}  osd: {OSD or '-'}", flush=True)
     print("pipeline:", " ".join(pl), flush=True)
     gst_proc = subprocess.Popen(pl, env=env)
-    with open(STATE_FILE, "w") as f:
-        f.write(PROFILE)
+
+    st = {"streak": 0, "connected": False}
+
+    def mark_running(proc):
+        # gst up 4s => tray "STREAM", but only for a clean run (streak==0)
+        # or a proven stream (connected) — a retry of a bad profile that
+        # stalls mid-connect must not flip the tray on
+        deadline = time.time() + 4
+        while time.time() < deadline:
+            if proc.poll() is not None or stopping.is_set():
+                return
+            time.sleep(0.2)
+        if st["streak"] == 0 or st["connected"]:
+            with open(STATE_FILE, "w") as f:
+                f.write(PROFILE)
+        # gst up 30s total => was really streaming; drops after this are
+        # retried forever (internet loss), below this => bad profile
+        deadline = time.time() + 26
+        while time.time() < deadline:
+            if proc.poll() is not None or stopping.is_set():
+                return
+            time.sleep(0.5)
+        if not st["connected"]:
+            st["connected"] = True
+            with open(STATE_FILE, "w") as f:
+                f.write(PROFILE)
 
     def supervise(proc):
         global gst_proc
         while not stopping.is_set():
+            t0 = time.time()
             rc = proc.wait()
             if stopping.is_set():
                 return
+            # died fast => connection/startup failure streak; ran a while
+            # => was streaming, so a fresh failure deserves a new notice
+            st["streak"] = st["streak"] + 1 if time.time() - t0 < 30 else 1
             print(f"gst exited (rc={rc}), restarting in 5s", flush=True)
+            if st["streak"] == 1:
+                notify(f"'{PROFILE}' stream failed",
+                       f"gst-launch exited (rc={rc}) — retrying every 5s. "
+                       "Check the RTMP URL/server.")
+            if st["streak"] == 3:  # sustained outage: tray back to "off"
+                try:
+                    os.unlink(STATE_FILE)
+                except OSError:
+                    pass
+            if st["streak"] == 2 and not st["connected"]:
+                # ~10s of failures, never streamed: bad profile — give up
+                # fast so the pidfile doesn't block other profiles
+                notify(f"'{PROFILE}' stream failed",
+                       "never connected — gave up")
+                GLib.idle_add(cleanup)
+                return
             time.sleep(5)
             if stopping.is_set():
                 return
             gst_proc = subprocess.Popen(pl, env=env)
             proc = gst_proc
+            threading.Thread(target=mark_running, args=(proc,),
+                             daemon=True).start()
 
     threading.Thread(target=supervise, args=(gst_proc,), daemon=True).start()
+    threading.Thread(target=mark_running, args=(gst_proc,), daemon=True).start()
 
 
 gst_proc = None

@@ -25,10 +25,10 @@ HEADER = """# stream-window profiles — one [section] per profile.
 # Keys:
 #   url            (required per profile) rtmp(s):// publish URL
 #   osd            text drawn on the stream (default: profile name in CAPS)
-#   osd_font       Pango font (default: Sans Bold 40)
-#   osd_color      text color (default: white)
-#   osd_outline    outline color (default: black; 'transparent' disables)
-#   osd_outline_width  outline thickness px (default: 0 = thin built-in)
+#   osd_font       Pango font (default: Sans 16)
+#   osd_color      text color (default: #FFFFFF22)
+#   osd_outline    outline color (default: transparent = disabled)
+#   osd_outline_width  outline thickness px (default: 1)
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
 #   bitrate        kbps, recommended <= 2500 (default: 1800)
@@ -58,10 +58,10 @@ ADV_FIELDS = [
 FIELDS = [("url", "RTMP URL")] + ADV_FIELDS
 
 
-class Editor(Gtk.Window):
-    def __init__(self):
-        super().__init__(title="Stream profiles")
-        self.set_default_size(640, 460)
+class Editor(Gtk.ApplicationWindow):
+    def __init__(self, **kwargs):
+        super().__init__(title="Stream profiles", **kwargs)
+        self.set_default_size(920, 460)
         self.set_border_width(8)
         self.dirty = False
         self.current = None
@@ -109,18 +109,20 @@ class Editor(Gtk.Window):
         top = Gtk.Grid(column_spacing=8, row_spacing=6)
         top.attach(Gtk.Label(label="Name", xalign=0), 0, 0, 1, 1)
         self.name_entry = Gtk.Entry()
+        self.name_entry.set_hexpand(True)
         self.name_entry.set_placeholder_text("profile name = OSD text")
         self.name_entry.connect("changed", self.on_rename)
         top.attach(self.name_entry, 1, 0, 1, 1)
         self.url_label = Gtk.Label(label="RTMP URL", xalign=0)
         top.attach(self.url_label, 0, 1, 1, 1)
         ue = Gtk.Entry()
+        ue.set_hexpand(True)
         ue.connect("changed", self.on_change)
         top.attach(ue, 1, 1, 1, 1)
         self.entries["url"] = ue
         top.attach(Gtk.Label(label="(name is drawn as the OSD text)",
                              xalign=0), 0, 2, 2, 1)
-        right.pack_start(top, False, False, 0)
+        right.pack_start(top, False, True, 0)
 
         self.exp = exp = Gtk.Expander(label="Advanced")
         exp.set_expanded(False)
@@ -136,10 +138,15 @@ class Editor(Gtk.Window):
         exp.add(grid)
         right.pack_start(exp, True, True, 0)
 
+        bbar = Gtk.Box(spacing=6)
         bsave = Gtk.Button(label="Save")
         bsave.get_style_context().add_class("suggested-action")
         bsave.connect("clicked", self.on_save)
-        right.pack_end(bsave, False, False, 0)
+        bsavec = Gtk.Button(label="Save and close")
+        bsavec.connect("clicked", self.on_save_close)
+        bbar.pack_start(bsave, True, True, 0)
+        bbar.pack_start(bsavec, True, True, 0)
+        right.pack_end(bbar, False, False, 0)
         self.status = Gtk.Label(label="", xalign=0)
         right.pack_end(self.status, False, False, 0)
         paned.pack2(right, True, False)
@@ -251,6 +258,10 @@ class Editor(Gtk.Window):
         self.dirty = False
         self.status.set_text(f"saved {INI}")
 
+    def on_save_close(self, *_):
+        self.on_save()
+        self.close()
+
 
 def apply_system_theme():
     """Use the dark GTK variant when GNOME prefers dark style."""
@@ -269,7 +280,18 @@ def apply_system_theme():
 
 
 apply_system_theme()
-win = Editor()
-win.connect("destroy", Gtk.main_quit)
-Gtk.main()
+
+app = Gtk.Application(application_id="strumok.profiles.edit")
+
+
+def on_activate(a):
+    w = a.get_active_window()
+    if w:
+        w.present()                  # editor already open: raise it
+    else:
+        Editor(application=a).present()
+
+
+app.connect("activate", on_activate)
+app.run()
 PYEOF
