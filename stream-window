@@ -154,7 +154,7 @@ osd_color = #FFFFFF55
 osd_outline = transparent
 osd_outline_width = 1
 osd_xpad = 48
-osd_ypad = 680
+osd_ypad = 32
 
 # Add profiles below — one [section] each (name = OSD text):
 # [my stream]
