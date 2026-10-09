@@ -20,8 +20,9 @@
 # copy of this file is all a fresh machine needs.
 #
 # Profile keys (ini): url, osd_font, osd_color, osd_outline,
-#   osd_outline_width, osd_xpad, osd_ypad, crop, bitrate,
-#   watch_proc, require_proc, start_cmd, encoder.
+#   osd_outline_width, osd_xpad, osd_ypad, crop, scale, fps,
+#   bitrate, trailing_slash, watch_proc, require_proc, start_cmd,
+#   encoder.
 #   The OSD text is the profile name (spaces allowed).
 #   Colors: names (white/black/...), #RGB, #RRGGBB, #RRGGBBAA,
 #   or raw 0xAARRGGBB.  A [DEFAULT] section supplies values to all
@@ -38,9 +39,11 @@
 #                          desktop notification (visible from tray launches)
 #   START_CMD=command      if REQUIRE_PROC isn't running, run this first and
 #                          wait up to 15s for the process to appear
-#   RTMP_TRAILING_SLASH=1  append '/' to URL (never applied to '?' URLs)
+#   RTMP_TRAILING_SLASH=0  disable the '/' suffix (default: on — the
+#                          server requires it; never applied to '?' URLs)
 #   OSD=text OSD_FONT=... OSD_COLOR=0xAARRGGBB OSD_OUTLINE=0x...
 #   OSD_XPAD=px OSD_YPAD=px   overlay settings for ad-hoc (URL) mode
+#   FPS=n SCALE="W H"|off     framerate and fit-box for ad-hoc mode
 #
 # First run on a fresh machine: the nix-shell shebang downloads all
 # dependencies automatically, and the portal picker dialog appears ONCE --
@@ -48,15 +51,15 @@
 # persist token is saved to ~/.local/share/stream-window.token and all
 # later runs skip the dialog entirely.
 #
-# Server defaults follow the docs: bitrate <= 2500k, 24 fps,
-# GOP = 2*fps (key-int-max 48), B-frames off, rtmp2sink.
+# Server-doc defaults: 1800 kbps (<= 2500k), 24 fps, scaled to fit
+# 1280x720, GOP = 2*fps, B-frames off, rtmp2sink, trailing '/' on URLs.
 #
 # Tray: while streaming, ~/.config/argos/stream.r.2s.sh shows the active
 # profile from $XDG_RUNTIME_DIR/stream-window.state.
 #
 # Stop: kill $(cat /run/user/1000/stream-window.pid)
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 
 set -euo pipefail
 
@@ -81,7 +84,12 @@ if [ ! -f "$CFG_DIR/profiles.ini" ]; then
 #   osd_outline_width  outline thickness px (default: 1)
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
+#   scale          fit video into "W H" box, aspect kept, no upscale
+#                  (default: 1280 720; 'off' streams the cropped size)
+#   fps            frames per second (default: 24, server max)
 #   bitrate        kbps, recommended <= 2500 (default: 1800)
+#   trailing_slash append '/' to url (default: 1 — server requires it;
+#                  never applied to '?' URLs)
 #   watch_proc     pgrep -f ERE pattern; stream exits when it dies
 #   require_proc   pgrep -f ERE pattern; warn + don't start if absent
 #   start_cmd      run this when require_proc is absent; wait ~15s for it
@@ -96,7 +104,10 @@ if [ ! -f "$CFG_DIR/profiles.ini" ]; then
 
 [DEFAULT]
 crop = 1150 220 2686 1938
+scale = 1280 720
+fps = 24
 bitrate = 1800
+trailing_slash = 1
 watch_proc = screenrec$
 require_proc = themis
 start_cmd = themis
@@ -106,7 +117,7 @@ osd_color = #FFFFFF55
 osd_outline = transparent
 osd_outline_width = 1
 osd_xpad = 48
-osd_ypad = 1800
+osd_ypad = 36
 
 # Add profiles below — one [section] each (name = OSD text):
 # [my stream]
@@ -187,7 +198,12 @@ HEADER = """# stream-window profiles — one [section] per profile.
 #   osd_outline_width  outline thickness px (default: 1)
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
+#   scale          fit video into "W H" box, aspect kept, no upscale
+#                  (default: 1280 720; 'off' streams the cropped size)
+#   fps            frames per second (default: 24, server max)
 #   bitrate        kbps, recommended <= 2500 (default: 1800)
+#   trailing_slash append '/' to url (default: 1 — server requires it;
+#                  never applied to '?' URLs)
 #   watch_proc     pgrep -f ERE pattern; stream exits when it dies
 #   require_proc   pgrep -f ERE pattern; warn + don't start if absent
 #   start_cmd      run this when require_proc is absent; wait ~15s for it
@@ -205,7 +221,10 @@ ADV_FIELDS = [
     ("osd_xpad", "OSD xpad"),
     ("osd_ypad", "OSD ypad"),
     ("crop", "Crop (x y w h)"),
+    ("scale", "Scale box (W H)"),
+    ("fps", "FPS"),
     ("bitrate", "Bitrate kbps"),
+    ("trailing_slash", "Trailing '/' on URL"),
     ("watch_proc", "Watch process"),
     ("require_proc", "Require process"),
     ("start_cmd", "Start command"),
@@ -558,7 +577,14 @@ import sys
 import threading
 import time
 
+import gi
 from gi.repository import Gio, GLib
+try:
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+    Gst.init(None)
+except Exception:
+    Gst = None                      # fall back to gst-inspect
 
 PIDFILE = sys.argv[1]
 ARGS = sys.argv[2:]
@@ -568,8 +594,8 @@ PROFILES_FILE = os.path.expanduser(os.environ.get(
 TOKEN_FILE = os.path.expanduser("~/.local/share/stream-window.token")
 STATE_FILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"),
                           "stream-window.state")
-FPS = 24
-KEY_INT = FPS * 2
+DEF_FPS = 24
+DEF_SCALE = (1280, 720)       # fit-inside box; scale=off streams as-is
 DEF_BITRATE = 1800            # server doc: recommended <= 2500
 DEF_OSD_FONT = "Sans 16"
 
@@ -603,6 +629,26 @@ def parse_color(s):
     elif low.startswith("0x") and len(s) == 10:
         return s                        # raw AARRGGBB
     sys.exit(f"error: bad color '{s}' (use a name, #RRGGBB[AA], or 0xAARRGGBB)")
+
+
+def parse_scale(s):
+    """'1280 720' / '1280x720' -> box; 'off'/'none'/'0' -> no scaling."""
+    s = str(s).strip().lower()
+    if s in ("off", "none", "0"):
+        return None
+    parts = s.replace("x", " ").split()
+    if len(parts) != 2 or not all(p.isdigit() for p in parts):
+        sys.exit(f"error: bad scale '{s}' (use 'W H' or 'off')")
+    return int(parts[0]), int(parts[1])
+
+
+def fit_size(w, h, max_w, max_h):
+    """Largest (w,h) inside the box, same aspect, even dims (h264 4:2:0
+    needs even). A source smaller than the box stays unscaled."""
+    if w <= 0 or h <= 0:
+        return max_w & ~1, max_h & ~1
+    s = min(max_w / w, max_h / h, 1.0)
+    return max(2, int(w * s) & ~1), max(2, int(h * s) & ~1)
 
 
 def load_profile(name):
@@ -643,6 +689,10 @@ if ARGS[0].startswith(("rtmp://", "rtmps://")):
     RTMP_URL = ARGS[0]
     CROP = ARGS[1:5] if len(ARGS) >= 5 else None
     BITRATE = int(ARGS[5]) if len(ARGS) > 5 else DEF_BITRATE
+    FPS = int(os.environ.get("FPS", DEF_FPS))
+    SCALE = (parse_scale(os.environ["SCALE"])
+             if os.environ.get("SCALE", "").strip() else DEF_SCALE)
+    TRAILING_SLASH = TRAILING_SLASH or "1"  # server requires the '/'
     OSD = os.environ.get("OSD", "")
     OSD_FONT = os.environ.get("OSD_FONT", DEF_OSD_FONT)
     OSD_COLOR = parse_color(os.environ.get("OSD_COLOR", "#FFFFFF22"))
@@ -669,6 +719,12 @@ else:
     REQUIRE_PROC = REQUIRE_PROC or p.get("require_proc", "")
     START_CMD = START_CMD or p.get("start_cmd", "")
     ENCODER = os.environ.get("ENCODER") or p.get("encoder", "auto")
+    FPS = int(p.get("fps", DEF_FPS))
+    SCALE = (parse_scale(p.get("scale"))
+             if p.get("scale", "").strip() else DEF_SCALE)
+    TRAILING_SLASH = TRAILING_SLASH or p.get("trailing_slash", "1")
+
+KEY_INT = FPS * 2
 
 # some servers require rtmp(s)://{host}/{path}/ (trailing '/'). Never applied
 # to URLs containing '?': a trailing '/' would corrupt the last query param.
@@ -687,6 +743,8 @@ tokens = itertools.count(1)
 
 
 def have_element(name):
+    if Gst is not None:
+        return Gst.ElementFactory.find(name) is not None
     return subprocess.run(["gst-inspect-1.0", name],
                           stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL).returncode == 0
@@ -696,7 +754,7 @@ def preflight():
     """Fail fast with readable errors on an unprepared system."""
     missing = [e for e in ("pipewiresrc", "flvmux", "rtmp2sink",
                            "avenc_aac", "h264parse", "aacparse",
-                           "textoverlay")
+                           "textoverlay", "videoscale")
                if not have_element(e)]
     if missing:
         sys.exit("error: missing gstreamer elements: " + ", ".join(missing))
@@ -775,11 +833,13 @@ def pick_encoder():
 def launch_gst(node_id, crop, win_size):
     global gst_proc
     enc = pick_encoder()
+    # cheapest-first order: videorate drops to FPS early, then crop and
+    # scale shrink the frame before videoconvert/OSD/encoder touch it
     pl = ["gst-launch-1.0", "-e",
           "flvmux", "name=mux", "streamable=true",
           "!", "rtmp2sink", f"location={RTMP_URL}", "sync=false",
           "pipewiresrc", f"path={node_id}", "do-timestamp=true",
-          "!", "videorate", "!", "videoconvert"]
+          "!", "videorate"]
     if crop:
         # videocrop takes margins from each edge
         cx, cy, cw, ch = crop
@@ -788,8 +848,19 @@ def launch_gst(node_id, crop, win_size):
         bottom = wh - (cy + ch)
         pl += ["!", "videocrop", f"left={cx}", f"top={cy}",
                f"right={max(right,0)}", f"bottom={max(bottom,0)}"]
+    # scale into the fit-box after crop but before OSD, so text is drawn
+    # once at the smaller output size (cheaper overlays + encoder input)
+    out_w, out_h = (crop[2], crop[3]) if crop else win_size
+    if SCALE:
+        out_w, out_h = fit_size(out_w, out_h, *SCALE)
+        pl += ["!", "videoscale", "!",
+               f"video/x-raw,width={out_w},height={out_h}"]
+    pl += ["!", "videoconvert"]
     if OSD:
         xp, yp = int(OSD_XPAD), int(OSD_YPAD)
+        if out_w and out_h and (xp >= out_w or yp >= out_h):
+            print(f"warning: osd padding {xp},{yp} >= frame {out_w}x{out_h}"
+                  " — text may be off-screen", flush=True)
         transparent = OSD_OUTLINE.endswith("00000000")
         if OSD_OUTLINE_W > 0 and not transparent:
             # emulate thick outline: copies of the text in outline color
@@ -827,10 +898,11 @@ def launch_gst(node_id, crop, win_size):
                "!", "h264parse", "!", "mux."]
     pl += ["audiotestsrc", "wave=silence", "is-live=true",
            "!", "audioconvert",
-           "!", "audio/x-raw,rate=44100,channels=2",
-           "!", "avenc_aac", "bitrate=128000",
+           "!", "audio/x-raw,rate=44100,channels=1",
+           "!", "avenc_aac", "bitrate=64000",
            "!", "aacparse", "!", "mux."]
-    print(f"profile: {PROFILE}  encoder: {enc}  osd: {OSD or '-'}", flush=True)
+    print(f"profile: {PROFILE}  encoder: {enc}  osd: {OSD or '-'}  "
+          f"out: {out_w or '?'}x{out_h or '?'}@{FPS}fps", flush=True)
     print("pipeline:", " ".join(pl), flush=True)
     gst_proc = subprocess.Popen(pl, env=env)
 

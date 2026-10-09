@@ -31,7 +31,12 @@ HEADER = """# stream-window profiles — one [section] per profile.
 #   osd_outline_width  outline thickness px (default: 1)
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
+#   scale          fit video into "W H" box, aspect kept, no upscale
+#                  (default: 1280 720; 'off' streams the cropped size)
+#   fps            frames per second (default: 24, server max)
 #   bitrate        kbps, recommended <= 2500 (default: 1800)
+#   trailing_slash append '/' to url (default: 1 — server requires it;
+#                  never applied to '?' URLs)
 #   watch_proc     pgrep -f ERE pattern; stream exits when it dies
 #   require_proc   pgrep -f ERE pattern; warn + don't start if absent
 #   start_cmd      run this when require_proc is absent; wait ~15s for it
@@ -49,7 +54,10 @@ ADV_FIELDS = [
     ("osd_xpad", "OSD xpad"),
     ("osd_ypad", "OSD ypad"),
     ("crop", "Crop (x y w h)"),
+    ("scale", "Scale box (W H)"),
+    ("fps", "FPS"),
     ("bitrate", "Bitrate kbps"),
+    ("trailing_slash", "Trailing '/' on URL"),
     ("watch_proc", "Watch process"),
     ("require_proc", "Require process"),
     ("start_cmd", "Start command"),

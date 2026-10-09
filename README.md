@@ -37,6 +37,12 @@ or edit `~/.config/stream-window/profiles.ini` by hand — one `[section]`
 per profile, each needs a `url` key. `[DEFAULT]` values apply to all
 profiles.
 
+Defaults follow the server doc: 24 fps, GOP = 2*fps, B-frames off,
+rtmp2sink, a trailing '/' is appended to RTMP URLs automatically
+(`trailing_slash = 0` or `RTMP_TRAILING_SLASH=0` disables). Output is
+scaled to fit 1280x720 at 1800 kbps — tune `scale`, `fps`, `bitrate`
+per profile (`scale = off` disables scaling).
+
 ## Run
 
 ```sh
