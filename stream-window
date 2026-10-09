@@ -141,9 +141,9 @@ if [ ! -f "$CFG_DIR/profiles.ini" ]; then
 
 [DEFAULT]
 crop = 1150 220 2686 1938
-scale = 1280 720
-fps = 24
-bitrate = 1800
+scale = 1920 1440
+fps = 20
+bitrate = 2200
 trailing_slash = 1
 watch_proc = screenrec$
 require_proc = themis
@@ -1176,7 +1176,10 @@ def launch_gst(node_id, crop, win_size):
     pl = ["gst-launch-1.0", "-e",
           "flvmux", "name=mux", "streamable=true",
           "!", "rtmp2sink", f"location={RTMP_URL}", "sync=false",
+          # pin system memory: videorate/videocrop can't handle DMABuf,
+          # and vapostproc downstream would otherwise negotiate it
           "pipewiresrc", f"path={node_id}", "do-timestamp=true",
+          "!", "video/x-raw",
           "!", "videorate"]
     if crop:
         # videocrop takes margins from each edge
