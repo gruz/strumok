@@ -63,7 +63,7 @@ fi
 [ -x "$EDIT" ] && echo "$(t edit) | bash='$EDIT' terminal=false"
 # the same one-liner as in README "Install": fetch latest stream-window,
 # chmod, run it once — self-install then updates all helper files
-echo "$(t update) | bash='curl -L --create-dirs -o $HOME/.local/bin/stream-window https://raw.githubusercontent.com/gruz/strumok/master/stream-window && chmod +x $HOME/.local/bin/stream-window && $HOME/.local/bin/stream-window --list' terminal=true refresh=true"
+echo "$(t update) | bash='curl -L --create-dirs -o $HOME/.local/bin/stream-window \"https://raw.githubusercontent.com/gruz/strumok/master/stream-window?v=\$(date +%s)\" && chmod +x $HOME/.local/bin/stream-window && $HOME/.local/bin/stream-window --list' terminal=true refresh=true"
 if [ -x "$RST" ]; then
     echo "$(t resetmenu) | font=monospace size=10 color=#888888"
     # each opens a terminal and waits for a typed 'yes' confirmation
