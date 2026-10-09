@@ -65,7 +65,7 @@
 #
 # Stop: kill $(cat /run/user/1000/stream-window.pid)
 
-VERSION="0.1.2"
+VERSION="0.1.3"
 
 set -euo pipefail
 
@@ -75,7 +75,7 @@ CFG_DIR="$HOME/.config/stream-window"
 mkdir -p "$BIN_DIR" "$CFG_DIR"
 
 # UI language: STREAM_LANG env > ~/.config/stream-window/lang > uk
-L="${STREAM_LANG:-$(cat "$CFG_DIR/lang" 2>/dev/null)}"
+L="${STREAM_LANG:-$(cat "$CFG_DIR/lang" 2>/dev/null || true)}"
 [ "$L" = en ] || L="uk"
 t() {
     local key="$1" s=""
