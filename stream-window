@@ -65,7 +65,7 @@
 #
 # Stop: kill $(cat /run/user/1000/stream-window.pid)
 
-VERSION="0.1.4"
+VERSION="0.1.5"
 
 set -euo pipefail
 
@@ -1160,7 +1160,8 @@ def pick_encoder():
     if ENCODER == "x264":
         return "x264"
     if ENCODER in ("auto", "va"):
-        if have_element("vah264lpenc") and os.path.isdir("/run/opengl-driver"):
+        if (have_element("vah264lpenc") and have_element("vapostproc")
+                and os.path.isdir("/run/opengl-driver")):
             return "va"
         if ENCODER == "va":
             print("warning: vah264lpenc/driver unavailable, using x264", flush=True)
@@ -1188,11 +1189,22 @@ def launch_gst(node_id, crop, win_size):
     # scale into the fit-box after crop but before OSD, so text is drawn
     # once at the smaller output size (cheaper overlays + encoder input)
     out_w, out_h = (crop[2], crop[3]) if crop else win_size
-    if SCALE:
-        out_w, out_h = fit_size(out_w, out_h, *SCALE)
-        pl += ["!", "videoscale", "method=lanczos", "!",
-               f"video/x-raw,width={out_w},height={out_h}"]
-    pl += ["!", "videoconvert"]
+    if enc == "va":
+        # vapostproc does scale + NV12 convert on the GPU — the CPU never
+        # touches full-size frames (textoverlay accepts NV12 natively)
+        caps = "video/x-raw,format=NV12"
+        if SCALE:
+            out_w, out_h = fit_size(out_w, out_h, *SCALE)
+            caps += f",width={out_w},height={out_h}"
+        pl += ["!", "vapostproc", "!", caps, "!", "queue",
+               "max-size-buffers=8", "leaky=downstream"]
+    else:
+        if SCALE:
+            out_w, out_h = fit_size(out_w, out_h, *SCALE)
+            pl += ["!", "videoscale", "method=bilinear", "!",
+                   f"video/x-raw,width={out_w},height={out_h}"]
+        pl += ["!", "videoconvert", "!", "queue",
+               "max-size-buffers=8", "leaky=downstream"]
     if OSD:
         xp, yp = int(OSD_XPAD), int(OSD_YPAD)
         if out_w and out_h and (xp >= out_w or yp >= out_h):
@@ -1225,11 +1237,13 @@ def launch_gst(node_id, crop, win_size):
         env["LIBVA_DRIVER_NAME"] = "iHD"
         env["LIBVA_DRIVERS_PATH"] = "/run/opengl-driver/lib/dri"
         pl += ["!", f"video/x-raw,format=NV12,framerate={FPS}/1",
+               "!", "queue", "max-size-buffers=8", "leaky=downstream",
                "!", "vah264lpenc", f"bitrate={BITRATE}",
                "rate-control=cbr", f"key-int-max={KEY_INT}", "b-frames=0",
                "!", "h264parse", "!", "mux."]
     else:
         pl += ["!", f"video/x-raw,format=I420,framerate={FPS}/1",
+               "!", "queue", "max-size-buffers=8", "leaky=downstream",
                "!", "x264enc", "tune=zerolatency", "speed-preset=veryfast",
                f"bitrate={BITRATE}", f"key-int-max={KEY_INT}", "bframes=0",
                "!", "h264parse", "!", "mux."]
