@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# stream-reset — restore the machine to "before stream-window ever ran",
+# so first-run behavior (deps download, picker dialog, token persist) can
+# be re-tested.
+#
+# Default mode resets RUNTIME + PERSISTED state only and keeps the
+# installed files (stream-window, profiles.ini, argos widget).
+# With --all it removes those files too (full uninstall).
+#
+# Currently covers state created by stream-window:
+#   - running stream processes and their gst children
+#   - $XDG_RUNTIME_DIR/stream-window.{pid,state}
+#   - ~/.local/share/stream-window.token  (portal persist handle)
+#   - ~/.local/share/flatpak/db/screencast (portal permission store entry)
+#   - portal daemons restarted (they cache persist tokens in memory)
+#   - ~/stream-window.log
+#
+# NOT covered: nix store caches (deps stay downloaded — harmless, a truly
+# fresh machine downloads them once anyway) and the Devin Desktop install
+# (~/.local/bin/devin-desktop, ~/.local/share/devin-desktop-libs,
+# ~/.local/share/applications/devin-desktop.desktop) which is unrelated.
+#
+# Note: stream-window self-installs profiles.ini, the argos widget,
+# stream-profiles-edit and stream-reset when they are missing — after
+# `--all`, run stream-window once and everything is back.
+
+set -u
+RTD="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+echo "[1/5] stopping running streams"
+[ -f "$RTD/stream-window.pid" ] && kill "$(cat "$RTD/stream-window.pid")" 2>/dev/null
+# leftovers that outlived their pidfile: orchestrators carry the pidfile
+# path in argv, gst children carry 'pipewiresrc'
+pkill -f 'stream-window\.pid' 2>/dev/null
+pkill -f 'pipewiresrc' 2>/dev/null
+sleep 1
+
+echo "[2/5] removing runtime files"
+rm -f "$RTD/stream-window.pid" "$RTD/stream-window.state" \
+      "$HOME/stream-window.log"
+
+echo "[3/5] removing portal persist token + permission entry"
+rm -f "$HOME/.local/share/stream-window.token" \
+      "$HOME/.local/share/flatpak/db/screencast"
+
+echo "[4/5] restarting portal daemons (clears in-memory persist)"
+pkill -f xdg-permission-store 2>/dev/null
+pkill -f xdg-desktop-portal 2>/dev/null
+sleep 1
+
+if [ "${1:-}" = "--all" ]; then
+    echo "[5/5] removing installed files"
+    rm -rf "$HOME/.config/stream-window"
+    rm -f "$HOME/.config/argos/stream.r.2s.sh"
+    rm -f "$HOME/.local/bin/stream-window" "$HOME/.local/bin/stream-profiles-edit"
+    rm -f "$HOME/.local/bin/stream-reset"
+    echo "done — full uninstall complete"
+else
+    echo "[5/5] done — fresh-machine state; script/config/widget kept"
+fi

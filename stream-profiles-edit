@@ -1,0 +1,251 @@
+#!/usr/bin/env nix-shell
+#!nix-shell -i bash -p "python3.withPackages (ps: [ ps.pygobject3 ])" gobject-introspection gtk3 glib
+#
+# stream-profiles-edit — GTK editor for ~/.config/stream-window/profiles.ini
+# Self-installed by stream-window on first run.
+
+set -euo pipefail
+exec python3 - <<'PYEOF'
+import configparser
+import os
+import sys
+
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+
+INI = os.path.expanduser(os.environ.get(
+    "STREAM_PROFILES", "~/.config/stream-window/profiles.ini"))
+
+HEADER = """# stream-window profiles — one [section] per profile.
+#
+# [DEFAULT] is not a profile: its values apply to every profile, and any
+# profile can override them by setting the same key.
+#
+# Keys:
+#   url            (required per profile) rtmp(s):// publish URL
+#   osd            text drawn on the stream (default: profile name in CAPS)
+#   osd_font       Pango font (default: Sans Bold 40)
+#   osd_color      text color (default: white)
+#   osd_outline    outline color (default: black; 'transparent' disables)
+#   osd_outline_width  outline thickness px (default: 0 = thin built-in)
+#   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
+#   crop           "x y w h" relative to window top-left
+#   bitrate        kbps, recommended <= 2500 (default: 1800)
+#   watch_proc     pgrep -f ERE pattern; stream exits when it dies
+#   encoder        auto | va | x264
+#
+# colors: white black red green blue yellow cyan magenta orange gray
+#         lightgray transparent | #RGB | #RRGGBB | #RRGGBBAA | 0xAARRGGBB
+"""
+
+ADV_FIELDS = [
+    ("osd_font", "OSD font"),
+    ("osd_color", "OSD color"),
+    ("osd_outline", "OSD outline"),
+    ("osd_outline_width", "OSD outline width"),
+    ("osd_xpad", "OSD xpad"),
+    ("osd_ypad", "OSD ypad"),
+    ("crop", "Crop (x y w h)"),
+    ("bitrate", "Bitrate kbps"),
+    ("watch_proc", "Watch process"),
+    ("encoder", "Encoder"),
+]
+FIELDS = [("url", "RTMP URL")] + ADV_FIELDS
+
+
+class Editor(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="Stream profiles")
+        self.set_default_size(640, 460)
+        self.set_border_width(8)
+        self.dirty = False
+        self.current = None
+
+        cfg = configparser.ConfigParser()
+        cfg.optionxform = str
+        cfg.read(INI)
+        self.data = {"DEFAULT": dict(cfg.defaults())}
+        for s in cfg.sections():
+            self.data[s] = dict(cfg[s])
+
+        paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        self.add(paned)
+
+        # left: profile list
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        left.set_border_width(6)
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.listbox.connect("row-selected", self.on_select)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_size_request(160, -1)
+        scroll.add(self.listbox)
+        left.pack_start(scroll, True, True, 0)
+
+        btnbox = Gtk.Box(spacing=6)
+        badd = Gtk.Button(label="Add")
+        badd.connect("clicked", self.on_add)
+        bdel = Gtk.Button(label="Delete")
+        bdel.connect("clicked", self.on_del)
+        btnbox.pack_start(badd, True, True, 0)
+        btnbox.pack_start(bdel, True, True, 0)
+        left.pack_start(btnbox, False, False, 0)
+        bdef = Gtk.Button(label="Defaults…")
+        bdef.set_tooltip_text("Edit shared [DEFAULT] values")
+        bdef.connect("clicked", self.on_defaults)
+        left.pack_start(bdef, False, False, 0)
+        paned.pack1(left, False, False)
+
+        # right: primary fields (name + url), then Advanced expander
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        right.set_border_width(6)
+        self.entries = {}
+
+        top = Gtk.Grid(column_spacing=8, row_spacing=6)
+        top.attach(Gtk.Label(label="Name", xalign=0), 0, 0, 1, 1)
+        self.name_entry = Gtk.Entry()
+        self.name_entry.set_placeholder_text("profile name = OSD text")
+        self.name_entry.connect("changed", self.on_rename)
+        top.attach(self.name_entry, 1, 0, 1, 1)
+        top.attach(Gtk.Label(label="RTMP URL", xalign=0), 0, 1, 1, 1)
+        ue = Gtk.Entry()
+        ue.connect("changed", self.on_change)
+        top.attach(ue, 1, 1, 1, 1)
+        self.entries["url"] = ue
+        top.attach(Gtk.Label(label="(name is drawn as the OSD text)",
+                             xalign=0), 0, 2, 2, 1)
+        right.pack_start(top, False, False, 0)
+
+        self.exp = exp = Gtk.Expander(label="Advanced")
+        exp.set_expanded(False)
+        grid = Gtk.Grid(column_spacing=8, row_spacing=6)
+        grid.set_border_width(4)
+        for i, (key, label) in enumerate(ADV_FIELDS):
+            l = Gtk.Label(label=label, xalign=0)
+            e = Gtk.Entry()
+            e.connect("changed", self.on_change)
+            grid.attach(l, 0, i, 1, 1)
+            grid.attach(e, 1, i, 1, 1)
+            self.entries[key] = e
+        exp.add(grid)
+        right.pack_start(exp, True, True, 0)
+
+        bsave = Gtk.Button(label="Save")
+        bsave.get_style_context().add_class("suggested-action")
+        bsave.connect("clicked", self.on_save)
+        right.pack_end(bsave, False, False, 0)
+        self.status = Gtk.Label(label="", xalign=0)
+        right.pack_end(self.status, False, False, 0)
+        paned.pack2(right, True, False)
+        self.right = right
+
+        for name in self.data:
+            if name != "DEFAULT":
+                self.add_row(name)
+        self.show_all()
+        rows = self.listbox.get_children()
+        if rows:
+            self.listbox.select_row(rows[0])
+        else:
+            self.right.hide()
+
+    def add_row(self, name):
+        row = Gtk.ListBoxRow()
+        row.add(Gtk.Label(label=name, xalign=0))
+        row._name = name
+        self.listbox.add(row)
+        row.show_all()
+
+    def _load(self, name):
+        self.current = name
+        vals = self.data.get(name, {})
+        for key, e in self.entries.items():
+            e.handler_block_by_func(self.on_change)
+            e.set_text(str(vals.get(key, "")))
+            e.handler_unblock_by_func(self.on_change)
+        is_def = name == "DEFAULT"
+        self.name_entry.handler_block_by_func(self.on_rename)
+        self.name_entry.set_text("DEFAULT (shared)" if is_def else name)
+        self.name_entry.set_sensitive(not is_def)
+        self.name_entry.handler_unblock_by_func(self.on_rename)
+        self.right.show_all()
+
+    def on_select(self, lb, row):
+        if row is None:
+            return
+        self.commit_current()
+        self._load(row._name)
+
+    def on_defaults(self, *_):
+        self.commit_current()
+        self.listbox.unselect_all()
+        self._load("DEFAULT")
+        self.exp.set_expanded(True)
+
+    def commit_current(self):
+        if not self.current:
+            return
+        vals = {k: e.get_text() for k, e in self.entries.items()
+                if e.get_text() != ""}
+        self.data[self.current] = vals
+
+    def on_change(self, *_):
+        self.commit_current()
+        self.dirty = True
+
+    def on_rename(self, entry):
+        if not self.current or self.current == "DEFAULT":
+            return
+        new = entry.get_text().strip()
+        if (not new or new == self.current or new in self.data
+                or "[" in new or "]" in new or new == "DEFAULT"):
+            return
+        self.data[new] = self.data.pop(self.current)
+        row = self.listbox.get_selected_row()
+        row._name = new
+        row.get_child().set_text(new)
+        self.current = new
+        self.dirty = True
+
+    def on_add(self, *_):
+        base = "profile"
+        i = 1
+        while f"{base}{i}" in self.data:
+            i += 1
+        name = f"{base}{i}"
+        self.data[name] = {"url": ""}
+        self.add_row(name)
+        for r in self.listbox.get_children():
+            if r._name == name:
+                self.listbox.select_row(r)
+        self.dirty = True
+
+    def on_del(self, *_):
+        row = self.listbox.get_selected_row()
+        if not row or row._name == "DEFAULT":
+            return
+        del self.data[row._name]
+        self.listbox.remove(row)
+        self.current = None
+        self.right.hide()
+        self.dirty = True
+
+    def on_save(self, *_):
+        self.commit_current()
+        out = [HEADER]
+        for name, vals in self.data.items():
+            out.append(f"[{name}]")
+            out += [f"{k} = {v}" for k, v in vals.items()]
+            out.append("")
+        os.makedirs(os.path.dirname(INI), exist_ok=True)
+        with open(INI, "w") as f:
+            f.write("\n".join(out))
+        self.dirty = False
+        self.status.set_text(f"saved {INI}")
+
+
+win = Editor()
+win.connect("destroy", Gtk.main_quit)
+Gtk.main()
+PYEOF

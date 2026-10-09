@@ -1,0 +1,6 @@
+# never commit real stream keys/tokens
+profiles.ini
+*.token
+*.log
+*.pid
+*.state
