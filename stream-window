@@ -98,6 +98,8 @@ if [ ! -f "$CFG_DIR/profiles.ini" ]; then
 crop = 1150 220 2686 1938
 bitrate = 1800
 watch_proc = screenrec$
+require_proc = themis
+start_cmd = themis
 encoder = auto
 osd_font = Sans 16
 osd_color = #FFFFFF55
