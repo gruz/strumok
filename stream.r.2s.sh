@@ -65,11 +65,12 @@ fi
 # chmod, run it once — self-install then updates all helper files
 echo "$(t update) | bash='curl -L --create-dirs -o $HOME/.local/bin/stream-window \"https://raw.githubusercontent.com/gruz/strumok/master/stream-window?v=\$(date +%s)\" && chmod +x $HOME/.local/bin/stream-window && $HOME/.local/bin/stream-window --list' terminal=true refresh=true"
 if [ -x "$RST" ]; then
-    echo "$(t resetmenu) | font=monospace size=10 color=#888888"
-    # each opens a terminal and waits for a typed 'yes' confirmation
-    echo "--$(t r_reset) | bash='$RST --reset' terminal=true refresh=true"
-    echo "--$(t r_backup) | bash='$RST --all' terminal=true refresh=true"
-    echo "--$(t r_keep) | bash='$RST --all --keep-profiles' terminal=true refresh=true"
+    echo "---"
+    # top-level, not '--' nested: the 2s refresh rebuilds the menu and
+    # collapses expanded submenus — nested items are unusable
+    echo "$(t r_reset) | bash='$RST --reset' terminal=true refresh=true size=10 color=#888888"
+    echo "$(t r_backup) | bash='$RST --all' terminal=true refresh=true size=10 color=#888888"
+    echo "$(t r_keep) | bash='$RST --all --keep-profiles' terminal=true refresh=true size=10 color=#888888"
 fi
 CFG_DIR=$(dirname "$LANG_FILE")
 if [ "$L" = uk ]; then
