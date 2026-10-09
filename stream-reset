@@ -3,9 +3,18 @@
 # so first-run behavior (deps download, picker dialog, token persist) can
 # be re-tested.
 #
-# Default mode resets RUNTIME + PERSISTED state only and keeps the
-# installed files (stream-window, profiles.ini, argos widget).
-# With --all it removes those files too (full uninstall).
+# Run with no arguments for an interactive menu. Flags (for scripts):
+#   --reset            reset runtime + portal state only (config kept)
+#   --all              full uninstall; profiles.ini is backed up first to
+#                      ~/.config/stream-window.profiles.ini.bak
+#   --keep-profiles    with --all: profiles.ini is kept in place instead
+#   -i, --interactive  force the interactive menu
+#   -y, --yes          skip the confirmation prompt
+#
+# Every mode asks for a typed 'yes' confirmation on a terminal; without a
+# terminal it refuses to run unless --yes is given.
+#
+# UI language: STREAM_LANG env > ~/.config/stream-window/lang > uk
 #
 # Currently covers state created by stream-window:
 #   - running stream processes and their gst children
@@ -20,14 +29,154 @@
 # (~/.local/bin/devin-desktop, ~/.local/share/devin-desktop-libs,
 # ~/.local/share/applications/devin-desktop.desktop) which is unrelated.
 #
-# Note: stream-window self-installs profiles.ini, the argos widget,
-# stream-profiles-edit and stream-reset when they are missing — after
-# `--all`, run stream-window once and everything is back.
+# Note: stream-window reinstalls/updates profiles.ini, the argos widget,
+# stream-profiles-edit and stream-reset on every run — after `--all`,
+# run stream-window once and everything is back.
 
 set -u
 RTD="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+CFG_DIR="$HOME/.config/stream-window"
+INI="$CFG_DIR/profiles.ini"
+BAK="$HOME/.config/stream-window.profiles.ini.bak"
 
-echo "[1/5] stopping running streams"
+L="${STREAM_LANG:-$(cat "$CFG_DIR/lang" 2>/dev/null)}"
+[ "$L" = en ] || L="uk"
+
+t() {
+    local key="$1" s=""
+    shift
+    case "$L:$key" in
+        en:cancelled)  s='cancelled' ;;
+        uk:cancelled)  s='скасовано' ;;
+        en:confirm)    s="type 'yes' to continue" ;;
+        uk:confirm)    s="введіть 'yes' для продовження" ;;
+        en:what_reset) s='reset stream state — runtime files + portal state cleared (config kept)' ;;
+        uk:what_reset) s='скидання стану стріму — runtime-файли та стан порталу буде очищено (конфіг лишиться)' ;;
+        en:what_keep)  s='FULL UNINSTALL — installed files removed, %s kept' ;;
+        uk:what_keep)  s='ПОВНЕ ВИДАЛЕННЯ — встановлені файли видалено, %s лишиться' ;;
+        en:what_bak)   s='FULL UNINSTALL — profiles backed up to %s' ;;
+        uk:what_bak)   s='ПОВНЕ ВИДАЛЕННЯ — профілі збережено в %s' ;;
+        en:no_tty)     s='requires confirmation — re-run on a terminal or add --yes' ;;
+        uk:no_tty)     s='потрібне підтвердження — запустіть у терміналі або додайте --yes' ;;
+        en:unknown)    s='unknown option: %s' ;;
+        uk:unknown)    s='невідома опція: %s' ;;
+        en:error)      s='error' ;;
+        uk:error)      s='помилка' ;;
+        en:s1) s='stopping running streams' ;;
+        uk:s1) s='зупиняю запущені стріми' ;;
+        en:s2) s='removing runtime files' ;;
+        uk:s2) s='видаляю runtime-файли' ;;
+        en:s3) s='removing portal persist token + permission entry' ;;
+        uk:s3) s='видаляю persist-токен порталу + запис дозволу' ;;
+        en:s4) s='restarting portal daemons (clears in-memory persist)' ;;
+        uk:s4) s="перезапускаю демони порталу (очищає persist у пам'яті)" ;;
+        en:s5) s='removing installed files' ;;
+        uk:s5) s='видаляю встановлені файли' ;;
+        en:backed)    s='profiles backed up to %s' ;;
+        uk:backed)    s='профілі збережено в %s' ;;
+        en:kept)      s='kept %s' ;;
+        uk:kept)      s='лишено %s' ;;
+        en:done_all)  s='done — full uninstall complete' ;;
+        uk:done_all)  s='готово — повне видалення завершено' ;;
+        en:done_soft) s='done — fresh-machine state; script/config/widget kept' ;;
+        uk:done_soft) s='готово — стан чистої машини; скрипт/конфіг/віджет лишились' ;;
+    esac
+    if [ $# -gt 0 ]; then printf "$s\n" "$@"; else printf '%s\n' "$s"; fi
+}
+
+ALL=0 KEEP=0 YES=0 MENU=0
+
+usage() {
+    if [ "$L" = en ]; then
+        cat <<'EOF'
+usage: stream-reset [options]
+
+  (none)             interactive menu
+  --reset            reset runtime + portal state only (config kept)
+  --all              full uninstall; profiles.ini is backed up first
+  --keep-profiles    with --all: keep profiles.ini in place instead
+  -i, --interactive  force the interactive menu
+  -y, --yes          skip the confirmation prompt
+EOF
+    else
+        cat <<'EOF'
+використання: stream-reset [опції]
+
+  (без опцій)        інтерактивне меню
+  --reset            скинути runtime + стан порталу (конфіг лишається)
+  --all              повне видалення; profiles.ini спочатку бекапиться
+  --keep-profiles    з --all: profiles.ini лишається на місці
+  -i, --interactive  примусово показати інтерактивне меню
+  -y, --yes          не питати підтвердження
+EOF
+    fi
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --reset) ;;
+        --all) ALL=1 ;;
+        --keep-profiles) KEEP=1 ;;
+        -i|--interactive) MENU=1 ;;
+        -y|--yes) YES=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) t unknown "$arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if [ "$MENU" = 1 ] || { [ "$#" -eq 0 ] && [ -t 0 ]; }; then
+    if [ "$L" = en ]; then
+        cat <<EOF
+stream-reset — pick an action:
+
+  1) reset       stop streams, clear runtime + portal state (config kept)
+  2) uninstall   remove everything (profiles.ini -> $BAK)
+  3) uninstall   remove everything, keep profiles.ini in place
+  q) cancel
+EOF
+    else
+        cat <<EOF
+stream-reset — оберіть дію:
+
+  1) скинути     зупинити стріми, очистити runtime + стан порталу (конфіг лишається)
+  2) видалити    прибрати все (profiles.ini -> $BAK)
+  3) видалити    прибрати все, але profiles.ini лишити на місці
+  q) скасувати
+EOF
+    fi
+    read -r -p "> " pick
+    case "$pick" in
+        1) ALL=0 ;;
+        2) ALL=1 KEEP=0 ;;
+        3) ALL=1 KEEP=1 ;;
+        *) t cancelled; exit 0 ;;
+    esac
+    echo
+fi
+
+if [ "$YES" != 1 ]; then
+    if [ "$ALL" = 1 ]; then
+        if [ "$KEEP" = 1 ]; then
+            WHAT=$(t what_keep "$INI")
+        else
+            WHAT=$(t what_bak "$BAK")
+        fi
+    else
+        WHAT=$(t what_reset)
+    fi
+    if [ ! -t 0 ]; then
+        echo "$(t error): $WHAT" >&2
+        t no_tty >&2
+        exit 2
+    fi
+    read -r -p "$WHAT — $(t confirm): " ans
+    if [ "$ans" != "yes" ] && [ "$ans" != "так" ]; then
+        t cancelled
+        exit 0
+    fi
+fi
+
+echo "[1/5] $(t s1)"
 [ -f "$RTD/stream-window.pid" ] && kill "$(cat "$RTD/stream-window.pid")" 2>/dev/null
 # leftovers that outlived their pidfile: orchestrators carry the pidfile
 # path in argv, gst children carry 'pipewiresrc'
@@ -35,26 +184,42 @@ pkill -f 'stream-window\.pid' 2>/dev/null
 pkill -f 'pipewiresrc' 2>/dev/null
 sleep 1
 
-echo "[2/5] removing runtime files"
+echo "[2/5] $(t s2)"
 rm -f "$RTD/stream-window.pid" "$RTD/stream-window.state" \
       "$HOME/stream-window.log"
 
-echo "[3/5] removing portal persist token + permission entry"
+echo "[3/5] $(t s3)"
 rm -f "$HOME/.local/share/stream-window.token" \
       "$HOME/.local/share/flatpak/db/screencast"
 
-echo "[4/5] restarting portal daemons (clears in-memory persist)"
+echo "[4/5] $(t s4)"
 pkill -f xdg-permission-store 2>/dev/null
 pkill -f xdg-desktop-portal 2>/dev/null
 sleep 1
 
-if [ "${1:-}" = "--all" ]; then
-    echo "[5/5] removing installed files"
-    rm -rf "$HOME/.config/stream-window"
+if [ "$ALL" = 1 ]; then
+    echo "[5/5] $(t s5)"
+    KEPT=""
+    if [ -f "$INI" ]; then
+        if [ "$KEEP" = 1 ]; then
+            KEPT=$(mktemp)
+            cp "$INI" "$KEPT"
+        else
+            cp "$INI" "$BAK"
+            t backed "$BAK"
+        fi
+    fi
+    rm -rf "$CFG_DIR"
+    if [ -n "$KEPT" ]; then
+        mkdir -p "$CFG_DIR"
+        cp "$KEPT" "$INI"
+        rm -f "$KEPT"
+        t kept "$INI"
+    fi
     rm -f "$HOME/.config/argos/stream.r.2s.sh"
     rm -f "$HOME/.local/bin/stream-window" "$HOME/.local/bin/stream-profiles-edit"
     rm -f "$HOME/.local/bin/stream-reset"
-    echo "done — full uninstall complete"
+    t done_all
 else
-    echo "[5/5] done — fresh-machine state; script/config/widget kept"
+    echo "[5/5] $(t done_soft)"
 fi

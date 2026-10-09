@@ -14,10 +14,12 @@
 #   stream-window --edit                       open the GTK profile editor
 #   stream-window --version                    print version
 #
-# Self-contained: on every run, missing support files are (re)installed
-# into ~/.local/bin and ~/.config — the profiles.ini template, the argos
-# tray widget, the GTK profile editor and stream-reset. A curl-downloaded
-# copy of this file is all a fresh machine needs.
+# Self-contained: on every run the support files are (re)installed into
+# ~/.local/bin and ~/.config and updated when their content differs —
+# the argos tray widget, the GTK profile editor and stream-reset. The
+# profiles.ini template is only created when missing — it is user config
+# and is never overwritten. A curl-downloaded copy of this file is all
+# a fresh machine needs.
 #
 # Profile keys (ini): url, osd_font, osd_color, osd_outline,
 #   osd_outline_width, osd_xpad, osd_ypad, crop, scale, fps,
@@ -30,13 +32,17 @@
 #
 # Env vars (override profile settings):
 #   ENCODER=auto|va|x264   hardware VAAPI encoder (auto = va if available)
-#   WATCH_PROC=pattern     exit when a process matching this pgrep -f ERE
-#                          pattern dies; waits for it to appear if absent.
+#   WATCH_PROC=pattern     exit when no process matches this pgrep -f ERE
+#                          pattern; waits for it to appear if absent.
 #                          Example: 'screenrec$' watches the tray app while
 #                          ignoring the 'screenrec --card ...' daemon.
 #   REQUIRE_PROC=pattern   refuse to start unless a process matching this
 #                          pgrep -f ERE pattern is running; warns via a
-#                          desktop notification (visible from tray launches)
+#                          desktop notification (visible from tray
+#                          launches). While streaming, the pids seen at
+#                          start are watched — when they die (the app was
+#                          closed, or restarted under a new pid) the
+#                          stream stops.
 #   START_CMD=command      if REQUIRE_PROC isn't running, run this first and
 #                          wait up to 15s for the process to appear
 #   RTMP_TRAILING_SLASH=0  disable the '/' suffix (default: on — the
@@ -51,25 +57,55 @@
 # persist token is saved to ~/.local/share/stream-window.token and all
 # later runs skip the dialog entirely.
 #
-# Server-doc defaults: 1800 kbps (<= 2500k), 24 fps, scaled to fit
-# 1280x720, GOP = 2*fps, B-frames off, rtmp2sink, trailing '/' on URLs.
+# Server-doc defaults: 2500 kbps (the max), 24 fps, scaled to fit
+# 1920x1440, x264 veryfast, GOP = 2*fps, bframes=0, rtmp2sink, '/'.
 #
 # Tray: while streaming, ~/.config/argos/stream.r.2s.sh shows the active
 # profile from $XDG_RUNTIME_DIR/stream-window.state.
 #
 # Stop: kill $(cat /run/user/1000/stream-window.pid)
 
-VERSION="0.1.1"
+VERSION="0.1.2"
 
 set -euo pipefail
 
-# --- self-install support files (only when missing) -----------------------
+# --- self-install support files (updated when content differs) ----------
 BIN_DIR="$HOME/.local/bin"
 CFG_DIR="$HOME/.config/stream-window"
 mkdir -p "$BIN_DIR" "$CFG_DIR"
 
+# UI language: STREAM_LANG env > ~/.config/stream-window/lang > uk
+L="${STREAM_LANG:-$(cat "$CFG_DIR/lang" 2>/dev/null)}"
+[ "$L" = en ] || L="uk"
+t() {
+    local key="$1" s=""
+    shift
+    case "$L:$key" in
+        en:running)     s="already running (pid %s) — stop with: kill \$(cat %s)" ;;
+        uk:running)     s="вже працює (pid %s) — зупинити: kill \$(cat %s)" ;;
+        en:not_started) s="not started — '%s' is already running" ;;
+        uk:not_started) s="не запущено — '%s' вже працює" ;;
+    esac
+    if [ $# -gt 0 ]; then printf "$s\n" "$@"; else printf '%s\n' "$s"; fi
+}
+
+# install_file <dst> [exec] — write stdin to dst when missing or different
+install_file() {
+    local dst="$1" tmp
+    tmp=$(mktemp) || return 1
+    cat > "$tmp"
+    if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
+        rm -f "$tmp"
+        return 0
+    fi
+    if [ "${2:-}" = exec ]; then chmod +x "$tmp"; fi
+    mv "$tmp" "$dst"
+    echo "installed/updated $dst" >&2
+}
+
+# profiles.ini is user config — created once, never overwritten
 if [ ! -f "$CFG_DIR/profiles.ini" ]; then
-    cat > "$CFG_DIR/profiles.ini" <<'INI_EOF'
+    install_file "$CFG_DIR/profiles.ini" <<'INI_EOF'
 # stream-window profiles — one [section] per profile.
 #
 # [DEFAULT] is not a profile: its values apply to every profile, and any
@@ -85,13 +121,14 @@ if [ ! -f "$CFG_DIR/profiles.ini" ]; then
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
 #   scale          fit video into "W H" box, aspect kept, no upscale
-#                  (default: 1280 720; 'off' streams the cropped size)
+#                  (default: 1920 1440; 'off' streams the cropped size)
 #   fps            frames per second (default: 24, server max)
-#   bitrate        kbps, recommended <= 2500 (default: 1800)
+#   bitrate        kbps, recommended <= 2500 (default: 2500)
 #   trailing_slash append '/' to url (default: 1 — server requires it;
 #                  never applied to '?' URLs)
-#   watch_proc     pgrep -f ERE pattern; stream exits when it dies
-#   require_proc   pgrep -f ERE pattern; warn + don't start if absent
+#   watch_proc     pgrep -f ERE pattern; stream exits when nothing matches
+#   require_proc   pgrep -f ERE pattern; warn + don't start if absent,
+#                  stream stops when that instance dies (app restart too)
 #   start_cmd      run this when require_proc is absent; wait ~15s for it
 #   encoder        auto | va | x264
 #
@@ -104,9 +141,9 @@ if [ ! -f "$CFG_DIR/profiles.ini" ]; then
 
 [DEFAULT]
 crop = 1150 220 2686 1938
-scale = 1280 720
+scale = 1920 1440
 fps = 24
-bitrate = 1800
+bitrate = 2500
 trailing_slash = 1
 watch_proc = screenrec$
 require_proc = themis
@@ -117,54 +154,104 @@ osd_color = #FFFFFF55
 osd_outline = transparent
 osd_outline_width = 1
 osd_xpad = 48
-osd_ypad = 36
+osd_ypad = 680
 
 # Add profiles below — one [section] each (name = OSD text):
 # [my stream]
 # url = rtmps://host/app/STREAM_KEY
 INI_EOF
-    echo "installed $CFG_DIR/profiles.ini" >&2
 fi
 
 ARGOS="$HOME/.config/argos/stream.r.2s.sh"
-if [ -d "$HOME/.config/argos" ] && [ ! -f "$ARGOS" ]; then
-    cat > "$ARGOS" <<'ARGOS_EOF'
+if [ -d "$HOME/.config/argos" ]; then
+    install_file "$ARGOS" exec <<'ARGOS_EOF'
 #!/bin/sh
 # Argos widget: shows which stream-window profile is streaming.
 # stream-window writes the active profile to $XDG_RUNTIME_DIR/stream-window.state
+#
+# UI language: STREAM_LANG env > ~/.config/stream-window/lang > uk
+# The "Language" menu item toggles the file; refresh re-renders the menu.
 
 RTD="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 STATE="$RTD/stream-window.state"
 PROFILES="${STREAM_PROFILES:-$HOME/.config/stream-window/profiles.ini}"
 EDIT="$HOME/.local/bin/stream-profiles-edit"
+RST="$HOME/.local/bin/stream-reset"
+LANG_FILE="$HOME/.config/stream-window/lang"
 VER=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$HOME/.local/bin/stream-window" 2>/dev/null | head -1)
 
+L="${STREAM_LANG:-$(cat "$LANG_FILE" 2>/dev/null)}"
+[ "$L" = "en" ] || L="uk"
+
+t() {
+    case "$L:$1" in
+        en:streaming) echo "● STREAM" ;;
+        uk:streaming) echo "● СТРІМ" ;;
+        en:stop)      echo "Stop stream" ;;
+        uk:stop)      echo "Зупинити стрім" ;;
+        en:off)       echo "stream: off" ;;
+        uk:off)       echo "стрім: вимк" ;;
+        en:start)     echo "Start" ;;
+        uk:start)     echo "Запустити" ;;
+        en:noprof)    echo "no profiles.ini" ;;
+        uk:noprof)    echo "немає profiles.ini" ;;
+        en:edit)      echo "Edit profiles…" ;;
+        uk:edit)      echo "Редагувати профілі…" ;;
+        en:update)    echo "Update version…" ;;
+        uk:update)    echo "Оновити версію…" ;;
+        en:resetmenu) echo "reset / uninstall" ;;
+        uk:resetmenu) echo "скидання / видалення" ;;
+        en:r_reset)   echo "Reset stream state…" ;;
+        uk:r_reset)   echo "Скинути стан стріму…" ;;
+        en:r_backup)  echo "Uninstall (backup profiles)…" ;;
+        uk:r_backup)  echo "Видалити (бекап профілів)…" ;;
+        en:r_keep)    echo "Uninstall (keep profiles)…" ;;
+        uk:r_keep)    echo "Видалити (лишити профілі)…" ;;
+        en:lang)      echo "Language: English" ;;
+        uk:lang)      echo "Мова: Українська" ;;
+    esac
+}
+
 if [ -s "$STATE" ]; then
-    echo "● STREAM: $(cat "$STATE") | color=#ff3333 font=monospace"
+    echo "$(t streaming): $(cat "$STATE") | color=#ff3333 font=monospace"
     echo "---"
-    echo "Stop stream | bash='kill \$(cat $RTD/stream-window.pid)' terminal=false refresh=true"
+    echo "$(t stop) | bash='kill \$(cat $RTD/stream-window.pid)' terminal=false refresh=true"
 else
-    echo "stream: off | color=#888888 font=monospace"
+    echo "$(t off) | color=#888888 font=monospace"
     echo "---"
     if [ -f "$PROFILES" ]; then
         grep -oE '^\[[^]]+\]' "$PROFILES" | tr -d '[]' | grep -vxF 'DEFAULT' | while read -r p; do
-            echo "Start: $p | bash='$HOME/.local/bin/stream-window \"$p\"' terminal=false refresh=true"
+            echo "$(t start): $p | bash='$HOME/.local/bin/stream-window \"$p\"' terminal=false refresh=true"
         done
     else
-        echo "no profiles.ini | color=#888888"
+        echo "$(t noprof) | color=#888888"
     fi
 fi
-[ -x "$EDIT" ] && echo "Edit profiles… | bash='$EDIT' terminal=false"
+[ -x "$EDIT" ] && echo "$(t edit) | bash='$EDIT' terminal=false"
+# the same one-liner as in README "Install": fetch latest stream-window,
+# chmod, run it once — self-install then updates all helper files
+echo "$(t update) | bash='curl -L --create-dirs -o $HOME/.local/bin/stream-window https://raw.githubusercontent.com/gruz/strumok/master/stream-window && chmod +x $HOME/.local/bin/stream-window && $HOME/.local/bin/stream-window --list' terminal=true refresh=true"
+if [ -x "$RST" ]; then
+    echo "$(t resetmenu) | font=monospace size=10 color=#888888"
+    # each opens a terminal and waits for a typed 'yes' confirmation
+    echo "--$(t r_reset) | bash='$RST --reset' terminal=true refresh=true"
+    echo "--$(t r_backup) | bash='$RST --all' terminal=true refresh=true"
+    echo "--$(t r_keep) | bash='$RST --all --keep-profiles' terminal=true refresh=true"
+fi
+CFG_DIR=$(dirname "$LANG_FILE")
+if [ "$L" = uk ]; then
+    echo "$(t lang) → English | bash='mkdir -p \"$CFG_DIR\" && echo en > \"$LANG_FILE\"' terminal=false refresh=true"
+else
+    echo "$(t lang) → Українська | bash='mkdir -p \"$CFG_DIR\" && echo uk > \"$LANG_FILE\"' terminal=false refresh=true"
+fi
 [ -n "$VER" ] && echo "stream-window v$VER | font=monospace size=10 color=#888888 href=https://github.com/gruz/strumok"
+exit 0
 ARGOS_EOF
-    chmod +x "$ARGOS"
-    echo "installed $ARGOS (tray widget)" >&2
-elif [ ! -d "$HOME/.config/argos" ]; then
+else
     echo "note: argos gnome extension not found — tray widget skipped" >&2
 fi
 
-if [ ! -f "$BIN_DIR/stream-profiles-edit" ]; then
-    cat > "$BIN_DIR/stream-profiles-edit" <<'EDIT_EOF'
+install_file "$BIN_DIR/stream-profiles-edit" exec <<'EDIT_EOF'
 #!/usr/bin/env nix-shell
 #!nix-shell -i bash -p "python3.withPackages (ps: [ ps.pygobject3 ])" gobject-introspection gtk3 glib
 #
@@ -184,6 +271,56 @@ from gi.repository import Gio, Gtk
 INI = os.path.expanduser(os.environ.get(
     "STREAM_PROFILES", "~/.config/stream-window/profiles.ini"))
 
+# UI language: STREAM_LANG env > ~/.config/stream-window/lang > uk
+_lang = os.environ.get("STREAM_LANG", "")
+if _lang not in ("uk", "en"):
+    try:
+        _lang = open(os.path.expanduser(
+            "~/.config/stream-window/lang")).read().strip()
+    except OSError:
+        _lang = ""
+LANG = _lang if _lang in ("uk", "en") else "uk"
+
+T = {
+    "title":       ("Stream profiles", "Профілі стріму"),
+    "name":        ("Name", "Назва"),
+    "url":         ("RTMP URL", "RTMP URL"),
+    "name_hint":   ("(name is drawn as the OSD text)",
+                    "(назва малюється як текст OSD)"),
+    "name_ph":     ("profile name = OSD text", "назва профілю = текст OSD"),
+    "advanced":    ("Advanced", "Додатково"),
+    "add":         ("Add", "Додати"),
+    "delete":      ("Delete", "Видалити"),
+    "defaults":    ("Defaults…", "Спільні…"),
+    "defaults_tt": ("Edit shared [DEFAULT] values",
+                    "Спільні значення [DEFAULT]"),
+    "save":        ("Save", "Зберегти"),
+    "save_close":  ("Save and close", "Зберегти й закрити"),
+    "saved":       ("saved %s", "збережено %s"),
+    "def_name":    ("DEFAULT (shared)", "DEFAULT (спільні)"),
+    "osd_font":    ("OSD font", "Шрифт OSD"),
+    "osd_color":   ("OSD color", "Колір OSD"),
+    "osd_outline": ("OSD outline", "Обведення OSD"),
+    "osd_outline_width": ("OSD outline width", "Товщина обведення"),
+    "osd_xpad":    ("OSD xpad", "OSD xpad"),
+    "osd_ypad":    ("OSD ypad", "OSD ypad"),
+    "crop":        ("Crop (x y w h)", "Кроп (x y w h)"),
+    "scale":       ("Scale box (W H)", "Скейл (W H)"),
+    "fps":         ("FPS", "FPS"),
+    "bitrate":     ("Bitrate kbps", "Бітрейт kbps"),
+    "trailing_slash": ("Trailing '/' on URL", "'/' вкінці URL"),
+    "watch_proc":  ("Watch process", "Стежити за процесом"),
+    "require_proc": ("Require process", "Вимагати процес"),
+    "start_cmd":   ("Start command", "Команда запуску"),
+    "encoder":     ("Encoder", "Енкодер"),
+}
+
+
+def tr(key, *args):
+    pair = T[key]
+    s = pair[0] if LANG == "en" else pair[1]
+    return s % args if args else s
+
 HEADER = """# stream-window profiles — one [section] per profile.
 #
 # [DEFAULT] is not a profile: its values apply to every profile, and any
@@ -199,13 +336,14 @@ HEADER = """# stream-window profiles — one [section] per profile.
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
 #   scale          fit video into "W H" box, aspect kept, no upscale
-#                  (default: 1280 720; 'off' streams the cropped size)
+#                  (default: 1920 1440; 'off' streams the cropped size)
 #   fps            frames per second (default: 24, server max)
-#   bitrate        kbps, recommended <= 2500 (default: 1800)
+#   bitrate        kbps, recommended <= 2500 (default: 2500)
 #   trailing_slash append '/' to url (default: 1 — server requires it;
 #                  never applied to '?' URLs)
-#   watch_proc     pgrep -f ERE pattern; stream exits when it dies
-#   require_proc   pgrep -f ERE pattern; warn + don't start if absent
+#   watch_proc     pgrep -f ERE pattern; stream exits when nothing matches
+#   require_proc   pgrep -f ERE pattern; warn + don't start if absent,
+#                  stream stops when that instance dies (app restart too)
 #   start_cmd      run this when require_proc is absent; wait ~15s for it
 #   encoder        auto | va | x264
 #
@@ -213,29 +351,16 @@ HEADER = """# stream-window profiles — one [section] per profile.
 #         lightgray transparent | #RGB | #RRGGBB | #RRGGBBAA | 0xAARRGGBB
 """
 
-ADV_FIELDS = [
-    ("osd_font", "OSD font"),
-    ("osd_color", "OSD color"),
-    ("osd_outline", "OSD outline"),
-    ("osd_outline_width", "OSD outline width"),
-    ("osd_xpad", "OSD xpad"),
-    ("osd_ypad", "OSD ypad"),
-    ("crop", "Crop (x y w h)"),
-    ("scale", "Scale box (W H)"),
-    ("fps", "FPS"),
-    ("bitrate", "Bitrate kbps"),
-    ("trailing_slash", "Trailing '/' on URL"),
-    ("watch_proc", "Watch process"),
-    ("require_proc", "Require process"),
-    ("start_cmd", "Start command"),
-    ("encoder", "Encoder"),
-]
-FIELDS = [("url", "RTMP URL")] + ADV_FIELDS
+ADV_KEYS = ["osd_font", "osd_color", "osd_outline", "osd_outline_width",
+            "osd_xpad", "osd_ypad", "crop", "scale", "fps", "bitrate",
+            "trailing_slash", "watch_proc", "require_proc", "start_cmd",
+            "encoder"]
+FIELDS = ["url"] + ADV_KEYS
 
 
 class Editor(Gtk.ApplicationWindow):
     def __init__(self, **kwargs):
-        super().__init__(title="Stream profiles", **kwargs)
+        super().__init__(title=tr("title"), **kwargs)
         self.set_default_size(920, 460)
         self.set_border_width(8)
         self.dirty = False
@@ -263,15 +388,15 @@ class Editor(Gtk.ApplicationWindow):
         left.pack_start(scroll, True, True, 0)
 
         btnbox = Gtk.Box(spacing=6)
-        badd = Gtk.Button(label="Add")
+        badd = Gtk.Button(label=tr("add"))
         badd.connect("clicked", self.on_add)
-        bdel = Gtk.Button(label="Delete")
+        bdel = Gtk.Button(label=tr("delete"))
         bdel.connect("clicked", self.on_del)
         btnbox.pack_start(badd, True, True, 0)
         btnbox.pack_start(bdel, True, True, 0)
         left.pack_start(btnbox, False, False, 0)
-        bdef = Gtk.Button(label="Defaults…")
-        bdef.set_tooltip_text("Edit shared [DEFAULT] values")
+        bdef = Gtk.Button(label=tr("defaults"))
+        bdef.set_tooltip_text(tr("defaults_tt"))
         bdef.connect("clicked", self.on_defaults)
         left.pack_start(bdef, False, False, 0)
         paned.pack1(left, False, False)
@@ -282,29 +407,29 @@ class Editor(Gtk.ApplicationWindow):
         self.entries = {}
 
         top = Gtk.Grid(column_spacing=8, row_spacing=6)
-        top.attach(Gtk.Label(label="Name", xalign=0), 0, 0, 1, 1)
+        top.attach(Gtk.Label(label=tr("name"), xalign=0), 0, 0, 1, 1)
         self.name_entry = Gtk.Entry()
         self.name_entry.set_hexpand(True)
-        self.name_entry.set_placeholder_text("profile name = OSD text")
+        self.name_entry.set_placeholder_text(tr("name_ph"))
         self.name_entry.connect("changed", self.on_rename)
         top.attach(self.name_entry, 1, 0, 1, 1)
-        self.url_label = Gtk.Label(label="RTMP URL", xalign=0)
+        self.url_label = Gtk.Label(label=tr("url"), xalign=0)
         top.attach(self.url_label, 0, 1, 1, 1)
         ue = Gtk.Entry()
         ue.set_hexpand(True)
         ue.connect("changed", self.on_change)
         top.attach(ue, 1, 1, 1, 1)
         self.entries["url"] = ue
-        top.attach(Gtk.Label(label="(name is drawn as the OSD text)",
+        top.attach(Gtk.Label(label=tr("name_hint"),
                              xalign=0), 0, 2, 2, 1)
         right.pack_start(top, False, True, 0)
 
-        self.exp = exp = Gtk.Expander(label="Advanced")
+        self.exp = exp = Gtk.Expander(label=tr("advanced"))
         exp.set_expanded(False)
         grid = Gtk.Grid(column_spacing=8, row_spacing=6)
         grid.set_border_width(4)
-        for i, (key, label) in enumerate(ADV_FIELDS):
-            l = Gtk.Label(label=label, xalign=0)
+        for i, key in enumerate(ADV_KEYS):
+            l = Gtk.Label(label=tr(key), xalign=0)
             e = Gtk.Entry()
             e.connect("changed", self.on_change)
             grid.attach(l, 0, i, 1, 1)
@@ -314,10 +439,10 @@ class Editor(Gtk.ApplicationWindow):
         right.pack_start(exp, True, True, 0)
 
         bbar = Gtk.Box(spacing=6)
-        bsave = Gtk.Button(label="Save")
+        bsave = Gtk.Button(label=tr("save"))
         bsave.get_style_context().add_class("suggested-action")
         bsave.connect("clicked", self.on_save)
-        bsavec = Gtk.Button(label="Save and close")
+        bsavec = Gtk.Button(label=tr("save_close"))
         bsavec.connect("clicked", self.on_save_close)
         bbar.pack_start(bsave, True, True, 0)
         bbar.pack_start(bsavec, True, True, 0)
@@ -354,7 +479,7 @@ class Editor(Gtk.ApplicationWindow):
             e.handler_unblock_by_func(self.on_change)
         is_def = name == "DEFAULT"
         self.name_entry.handler_block_by_func(self.on_rename)
-        self.name_entry.set_text("DEFAULT (shared)" if is_def else name)
+        self.name_entry.set_text(tr("def_name") if is_def else name)
         self.name_entry.set_sensitive(not is_def)
         self.name_entry.handler_unblock_by_func(self.on_rename)
         self.url_label.set_visible(not is_def)
@@ -431,7 +556,7 @@ class Editor(Gtk.ApplicationWindow):
         with open(INI, "w") as f:
             f.write("\n".join(out))
         self.dirty = False
-        self.status.set_text(f"saved {INI}")
+        self.status.set_text(tr("saved", INI))
 
     def on_save_close(self, *_):
         self.on_save()
@@ -471,20 +596,25 @@ app.connect("activate", on_activate)
 app.run()
 PYEOF
 EDIT_EOF
-    chmod +x "$BIN_DIR/stream-profiles-edit"
-    echo "installed $BIN_DIR/stream-profiles-edit" >&2
-fi
 
-if [ ! -f "$BIN_DIR/stream-reset" ]; then
-    cat > "$BIN_DIR/stream-reset" <<'RESET_EOF'
+install_file "$BIN_DIR/stream-reset" exec <<'RESET_EOF'
 #!/usr/bin/env bash
 # stream-reset — restore the machine to "before stream-window ever ran",
 # so first-run behavior (deps download, picker dialog, token persist) can
 # be re-tested.
 #
-# Default mode resets RUNTIME + PERSISTED state only and keeps the
-# installed files (stream-window, profiles.ini, argos widget).
-# With --all it removes those files too (full uninstall).
+# Run with no arguments for an interactive menu. Flags (for scripts):
+#   --reset            reset runtime + portal state only (config kept)
+#   --all              full uninstall; profiles.ini is backed up first to
+#                      ~/.config/stream-window.profiles.ini.bak
+#   --keep-profiles    with --all: profiles.ini is kept in place instead
+#   -i, --interactive  force the interactive menu
+#   -y, --yes          skip the confirmation prompt
+#
+# Every mode asks for a typed 'yes' confirmation on a terminal; without a
+# terminal it refuses to run unless --yes is given.
+#
+# UI language: STREAM_LANG env > ~/.config/stream-window/lang > uk
 #
 # Currently covers state created by stream-window:
 #   - running stream processes and their gst children
@@ -499,14 +629,154 @@ if [ ! -f "$BIN_DIR/stream-reset" ]; then
 # (~/.local/bin/devin-desktop, ~/.local/share/devin-desktop-libs,
 # ~/.local/share/applications/devin-desktop.desktop) which is unrelated.
 #
-# Note: stream-window self-installs profiles.ini, the argos widget,
-# stream-profiles-edit and stream-reset when they are missing — after
-# `--all`, run stream-window once and everything is back.
+# Note: stream-window reinstalls/updates profiles.ini, the argos widget,
+# stream-profiles-edit and stream-reset on every run — after `--all`,
+# run stream-window once and everything is back.
 
 set -u
 RTD="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+CFG_DIR="$HOME/.config/stream-window"
+INI="$CFG_DIR/profiles.ini"
+BAK="$HOME/.config/stream-window.profiles.ini.bak"
 
-echo "[1/5] stopping running streams"
+L="${STREAM_LANG:-$(cat "$CFG_DIR/lang" 2>/dev/null)}"
+[ "$L" = en ] || L="uk"
+
+t() {
+    local key="$1" s=""
+    shift
+    case "$L:$key" in
+        en:cancelled)  s='cancelled' ;;
+        uk:cancelled)  s='скасовано' ;;
+        en:confirm)    s="type 'yes' to continue" ;;
+        uk:confirm)    s="введіть 'yes' для продовження" ;;
+        en:what_reset) s='reset stream state — runtime files + portal state cleared (config kept)' ;;
+        uk:what_reset) s='скидання стану стріму — runtime-файли та стан порталу буде очищено (конфіг лишиться)' ;;
+        en:what_keep)  s='FULL UNINSTALL — installed files removed, %s kept' ;;
+        uk:what_keep)  s='ПОВНЕ ВИДАЛЕННЯ — встановлені файли видалено, %s лишиться' ;;
+        en:what_bak)   s='FULL UNINSTALL — profiles backed up to %s' ;;
+        uk:what_bak)   s='ПОВНЕ ВИДАЛЕННЯ — профілі збережено в %s' ;;
+        en:no_tty)     s='requires confirmation — re-run on a terminal or add --yes' ;;
+        uk:no_tty)     s='потрібне підтвердження — запустіть у терміналі або додайте --yes' ;;
+        en:unknown)    s='unknown option: %s' ;;
+        uk:unknown)    s='невідома опція: %s' ;;
+        en:error)      s='error' ;;
+        uk:error)      s='помилка' ;;
+        en:s1) s='stopping running streams' ;;
+        uk:s1) s='зупиняю запущені стріми' ;;
+        en:s2) s='removing runtime files' ;;
+        uk:s2) s='видаляю runtime-файли' ;;
+        en:s3) s='removing portal persist token + permission entry' ;;
+        uk:s3) s='видаляю persist-токен порталу + запис дозволу' ;;
+        en:s4) s='restarting portal daemons (clears in-memory persist)' ;;
+        uk:s4) s="перезапускаю демони порталу (очищає persist у пам'яті)" ;;
+        en:s5) s='removing installed files' ;;
+        uk:s5) s='видаляю встановлені файли' ;;
+        en:backed)    s='profiles backed up to %s' ;;
+        uk:backed)    s='профілі збережено в %s' ;;
+        en:kept)      s='kept %s' ;;
+        uk:kept)      s='лишено %s' ;;
+        en:done_all)  s='done — full uninstall complete' ;;
+        uk:done_all)  s='готово — повне видалення завершено' ;;
+        en:done_soft) s='done — fresh-machine state; script/config/widget kept' ;;
+        uk:done_soft) s='готово — стан чистої машини; скрипт/конфіг/віджет лишились' ;;
+    esac
+    if [ $# -gt 0 ]; then printf "$s\n" "$@"; else printf '%s\n' "$s"; fi
+}
+
+ALL=0 KEEP=0 YES=0 MENU=0
+
+usage() {
+    if [ "$L" = en ]; then
+        cat <<'EOF'
+usage: stream-reset [options]
+
+  (none)             interactive menu
+  --reset            reset runtime + portal state only (config kept)
+  --all              full uninstall; profiles.ini is backed up first
+  --keep-profiles    with --all: keep profiles.ini in place instead
+  -i, --interactive  force the interactive menu
+  -y, --yes          skip the confirmation prompt
+EOF
+    else
+        cat <<'EOF'
+використання: stream-reset [опції]
+
+  (без опцій)        інтерактивне меню
+  --reset            скинути runtime + стан порталу (конфіг лишається)
+  --all              повне видалення; profiles.ini спочатку бекапиться
+  --keep-profiles    з --all: profiles.ini лишається на місці
+  -i, --interactive  примусово показати інтерактивне меню
+  -y, --yes          не питати підтвердження
+EOF
+    fi
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --reset) ;;
+        --all) ALL=1 ;;
+        --keep-profiles) KEEP=1 ;;
+        -i|--interactive) MENU=1 ;;
+        -y|--yes) YES=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) t unknown "$arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if [ "$MENU" = 1 ] || { [ "$#" -eq 0 ] && [ -t 0 ]; }; then
+    if [ "$L" = en ]; then
+        cat <<EOF
+stream-reset — pick an action:
+
+  1) reset       stop streams, clear runtime + portal state (config kept)
+  2) uninstall   remove everything (profiles.ini -> $BAK)
+  3) uninstall   remove everything, keep profiles.ini in place
+  q) cancel
+EOF
+    else
+        cat <<EOF
+stream-reset — оберіть дію:
+
+  1) скинути     зупинити стріми, очистити runtime + стан порталу (конфіг лишається)
+  2) видалити    прибрати все (profiles.ini -> $BAK)
+  3) видалити    прибрати все, але profiles.ini лишити на місці
+  q) скасувати
+EOF
+    fi
+    read -r -p "> " pick
+    case "$pick" in
+        1) ALL=0 ;;
+        2) ALL=1 KEEP=0 ;;
+        3) ALL=1 KEEP=1 ;;
+        *) t cancelled; exit 0 ;;
+    esac
+    echo
+fi
+
+if [ "$YES" != 1 ]; then
+    if [ "$ALL" = 1 ]; then
+        if [ "$KEEP" = 1 ]; then
+            WHAT=$(t what_keep "$INI")
+        else
+            WHAT=$(t what_bak "$BAK")
+        fi
+    else
+        WHAT=$(t what_reset)
+    fi
+    if [ ! -t 0 ]; then
+        echo "$(t error): $WHAT" >&2
+        t no_tty >&2
+        exit 2
+    fi
+    read -r -p "$WHAT — $(t confirm): " ans
+    if [ "$ans" != "yes" ] && [ "$ans" != "так" ]; then
+        t cancelled
+        exit 0
+    fi
+fi
+
+echo "[1/5] $(t s1)"
 [ -f "$RTD/stream-window.pid" ] && kill "$(cat "$RTD/stream-window.pid")" 2>/dev/null
 # leftovers that outlived their pidfile: orchestrators carry the pidfile
 # path in argv, gst children carry 'pipewiresrc'
@@ -514,33 +784,46 @@ pkill -f 'stream-window\.pid' 2>/dev/null
 pkill -f 'pipewiresrc' 2>/dev/null
 sleep 1
 
-echo "[2/5] removing runtime files"
+echo "[2/5] $(t s2)"
 rm -f "$RTD/stream-window.pid" "$RTD/stream-window.state" \
       "$HOME/stream-window.log"
 
-echo "[3/5] removing portal persist token + permission entry"
+echo "[3/5] $(t s3)"
 rm -f "$HOME/.local/share/stream-window.token" \
       "$HOME/.local/share/flatpak/db/screencast"
 
-echo "[4/5] restarting portal daemons (clears in-memory persist)"
+echo "[4/5] $(t s4)"
 pkill -f xdg-permission-store 2>/dev/null
 pkill -f xdg-desktop-portal 2>/dev/null
 sleep 1
 
-if [ "${1:-}" = "--all" ]; then
-    echo "[5/5] removing installed files"
-    rm -rf "$HOME/.config/stream-window"
+if [ "$ALL" = 1 ]; then
+    echo "[5/5] $(t s5)"
+    KEPT=""
+    if [ -f "$INI" ]; then
+        if [ "$KEEP" = 1 ]; then
+            KEPT=$(mktemp)
+            cp "$INI" "$KEPT"
+        else
+            cp "$INI" "$BAK"
+            t backed "$BAK"
+        fi
+    fi
+    rm -rf "$CFG_DIR"
+    if [ -n "$KEPT" ]; then
+        mkdir -p "$CFG_DIR"
+        cp "$KEPT" "$INI"
+        rm -f "$KEPT"
+        t kept "$INI"
+    fi
     rm -f "$HOME/.config/argos/stream.r.2s.sh"
     rm -f "$HOME/.local/bin/stream-window" "$HOME/.local/bin/stream-profiles-edit"
     rm -f "$HOME/.local/bin/stream-reset"
-    echo "done — full uninstall complete"
+    t done_all
 else
-    echo "[5/5] done — fresh-machine state; script/config/widget kept"
+    echo "[5/5] $(t done_soft)"
 fi
 RESET_EOF
-    chmod +x "$BIN_DIR/stream-reset"
-    echo "installed $BIN_DIR/stream-reset" >&2
-fi
 # --- end self-install ------------------------------------------------------
 
 PIDFILE="${XDG_RUNTIME_DIR:-/tmp}/stream-window.pid"
@@ -553,12 +836,12 @@ case "${1:-}" in
     *)
         if [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
             cur=$(tr '\0' '\n' < "/proc/$(cat "$PIDFILE")/cmdline" 2>/dev/null | tail -1)
-            echo "already running (pid $(cat "$PIDFILE")) — stop with: kill \$(cat $PIDFILE)" >&2
+            t running "$(cat "$PIDFILE")" "$PIDFILE" >&2
             gdbus call --session --dest org.freedesktop.Notifications \
                 --object-path /org/freedesktop/Notifications \
                 --method org.freedesktop.Notifications.Notify \
                 "stream-window" 0 "dialog-warning" "stream-window" \
-                "not started — '${cur:-?}' is already running" "[]" "{}" 8000 \
+                "$(t not_started "${cur:-?}")" "[]" "{}" 8000 \
                 >/dev/null 2>&1 || true
             exit 1
         fi
@@ -595,9 +878,57 @@ TOKEN_FILE = os.path.expanduser("~/.local/share/stream-window.token")
 STATE_FILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"),
                           "stream-window.state")
 DEF_FPS = 24
-DEF_SCALE = (1280, 720)       # fit-inside box; scale=off streams as-is
-DEF_BITRATE = 1800            # server doc: recommended <= 2500
+DEF_SCALE = (1920, 1440)      # fit-inside box; scale=off streams as-is
+DEF_BITRATE = 2500            # server doc: recommended <= 2500
 DEF_OSD_FONT = "Sans 16"
+
+# UI language: STREAM_LANG env > ~/.config/stream-window/lang > uk
+_lang = os.environ.get("STREAM_LANG", "")
+if _lang not in ("uk", "en"):
+    try:
+        _lang = open(os.path.expanduser(
+            "~/.config/stream-window/lang")).read().strip()
+    except OSError:
+        _lang = ""
+LANG = _lang if _lang in ("uk", "en") else "uk"
+
+# user-facing strings (errors, usage, desktop notifications) — operational
+# print() logs stay in English
+T = {
+    "usage": ("usage: stream-window <profile> | <rtmp-url> [x y w h] [kbps] | --list",
+              "використання: stream-window <профіль> | <rtmp-url> [x y w h] [kbps] | --list"),
+    "no_ini": ("error: '%s' is not an rtmp(s) URL and no profiles file found at %s",
+               "помилка: '%s' не rtmp(s)-URL і файлу профілів немає: %s"),
+    "no_profile": ("error: no profile '%s' in %s\nprofiles: %s",
+                   "помилка: немає профілю '%s' у %s\nпрофілі: %s"),
+    "no_url": ("error: profile '%s' has no 'url' key",
+               "помилка: у профілі '%s' немає ключа 'url'"),
+    "bad_color": ("error: bad color '%s' (use a name, #RRGGBB[AA], or 0xAARRGGBB)",
+                  "помилка: некоректний колір '%s' (ім'я, #RRGGBB[AA] або 0xAARRGGBB)"),
+    "bad_scale": ("error: bad scale '%s' (use 'W H' or 'off')",
+                  "помилка: некоректний scale '%s' ('W H' або 'off')"),
+    "missing_el": ("error: missing gstreamer elements: %s",
+                   "помилка: відсутні gstreamer-елементи: %s"),
+    "no_portal": ("error: xdg-desktop-portal ScreenCast unavailable: %s",
+                  "помилка: xdg-desktop-portal ScreenCast недоступний: %s"),
+    "no_profiles": ("no profiles in %s", "немає профілів у %s"),
+    "notify_fail": ("'%s' stream failed", "стрім '%s' упав"),
+    "fail_body": ("gst-launch exited (rc=%s) — retrying every 5s. "
+                  "Check the RTMP URL/server.",
+                  "gst-launch завершився (rc=%s) — повторюю кожні 5с. "
+                  "Перевірте RTMP URL/сервер."),
+    "gaveup_body": ("never connected — gave up",
+                    "не вдалося підключитись — припиняю"),
+    "notify_notstarted": ("'%s' not started", "'%s' не запущено"),
+    "no_proc": ("no running process matches '%s'",
+                "немає процесу за патерном '%s'"),
+}
+
+
+def tr(key, *args):
+    pair = T[key]
+    s = pair[0] if LANG == "en" else pair[1]
+    return s % args if args else s
 
 NAMED_COLORS = {
     "white": "FFFFFFFF", "black": "FF000000", "red": "FFFF0000",
@@ -628,7 +959,7 @@ def parse_color(s):
             return "0x" + h.upper()
     elif low.startswith("0x") and len(s) == 10:
         return s                        # raw AARRGGBB
-    sys.exit(f"error: bad color '{s}' (use a name, #RRGGBB[AA], or 0xAARRGGBB)")
+    sys.exit(tr("bad_color", s))
 
 
 def parse_scale(s):
@@ -638,7 +969,7 @@ def parse_scale(s):
         return None
     parts = s.replace("x", " ").split()
     if len(parts) != 2 or not all(p.isdigit() for p in parts):
-        sys.exit(f"error: bad scale '{s}' (use 'W H' or 'off')")
+        sys.exit(tr("bad_scale", s))
     return int(parts[0]), int(parts[1])
 
 
@@ -654,23 +985,21 @@ def fit_size(w, h, max_w, max_h):
 def load_profile(name):
     cfg = configparser.ConfigParser()
     if not cfg.read(PROFILES_FILE):
-        sys.exit(f"error: '{name}' is not an rtmp(s) URL and no profiles "
-                 f"file found at {PROFILES_FILE}")
+        sys.exit(tr("no_ini", name, PROFILES_FILE))
     if not cfg.has_section(name):
-        sys.exit(f"error: no profile '{name}' in {PROFILES_FILE}\n"
-                 f"profiles: {', '.join(cfg.sections())}")
+        sys.exit(tr("no_profile", name, PROFILES_FILE,
+                    ", ".join(cfg.sections())))
     return cfg[name]
 
 
 if not ARGS or ARGS[0] in ("-h", "--help"):
-    sys.exit("usage: stream-window <profile> | <rtmp-url> [x y w h] [kbps] "
-             "| --list")
+    sys.exit(tr("usage"))
 
 if ARGS[0] == "--list":
     cfg = configparser.ConfigParser()
     cfg.read(PROFILES_FILE)
     if not cfg.sections():
-        print(f"no profiles in {PROFILES_FILE}")
+        print(tr("no_profiles", PROFILES_FILE))
     for s in cfg.sections():
         u = cfg[s].get("url", "?")
         host = u.split("//", 1)[-1].split("/", 1)[0]
@@ -705,7 +1034,7 @@ else:
     p = load_profile(PROFILE)   # [DEFAULT] values apply automatically
     RTMP_URL = p.get("url", "")
     if not RTMP_URL:
-        sys.exit(f"error: profile '{PROFILE}' has no 'url' key")
+        sys.exit(tr("no_url", PROFILE))
     CROP = p.get("crop", "").split() or None
     BITRATE = int(p.get("bitrate", DEF_BITRATE))
     OSD = PROFILE                    # OSD text is the profile name
@@ -757,14 +1086,14 @@ def preflight():
                            "textoverlay", "videoscale")
                if not have_element(e)]
     if missing:
-        sys.exit("error: missing gstreamer elements: " + ", ".join(missing))
+        sys.exit(tr("missing_el", ", ".join(missing)))
     try:
         bus.call_sync(PORTAL, PORTAL_PATH,
                       "org.freedesktop.DBus.Properties", "Get",
                       GLib.Variant("(ss)", (SC_IFACE, "version")),
                       None, Gio.DBusCallFlags.NONE, 5000, None)
     except Exception as e:
-        sys.exit(f"error: xdg-desktop-portal ScreenCast unavailable: {e}")
+        sys.exit(tr("no_portal", e))
     if not os.environ.get("WAYLAND_DISPLAY"):
         print("warning: WAYLAND_DISPLAY unset — are you in a Wayland session?",
               flush=True)
@@ -853,7 +1182,7 @@ def launch_gst(node_id, crop, win_size):
     out_w, out_h = (crop[2], crop[3]) if crop else win_size
     if SCALE:
         out_w, out_h = fit_size(out_w, out_h, *SCALE)
-        pl += ["!", "videoscale", "!",
+        pl += ["!", "videoscale", "method=lanczos", "!",
                f"video/x-raw,width={out_w},height={out_h}"]
     pl += ["!", "videoconvert"]
     if OSD:
@@ -893,7 +1222,7 @@ def launch_gst(node_id, crop, win_size):
                "!", "h264parse", "!", "mux."]
     else:
         pl += ["!", f"video/x-raw,format=I420,framerate={FPS}/1",
-               "!", "x264enc", "tune=zerolatency", "speed-preset=ultrafast",
+               "!", "x264enc", "tune=zerolatency", "speed-preset=veryfast",
                f"bitrate={BITRATE}", f"key-int-max={KEY_INT}", "bframes=0",
                "!", "h264parse", "!", "mux."]
     pl += ["audiotestsrc", "wave=silence", "is-live=true",
@@ -944,9 +1273,7 @@ def launch_gst(node_id, crop, win_size):
             st["streak"] = st["streak"] + 1 if time.time() - t0 < 30 else 1
             print(f"gst exited (rc={rc}), restarting in 5s", flush=True)
             if st["streak"] == 1:
-                notify(f"'{PROFILE}' stream failed",
-                       f"gst-launch exited (rc={rc}) — retrying every 5s. "
-                       "Check the RTMP URL/server.")
+                notify(tr("notify_fail", PROFILE), tr("fail_body", rc))
             if st["streak"] == 3:  # sustained outage: tray back to "off"
                 try:
                     os.unlink(STATE_FILE)
@@ -955,8 +1282,7 @@ def launch_gst(node_id, crop, win_size):
             if st["streak"] == 2 and not st["connected"]:
                 # ~10s of failures, never streamed: bad profile — give up
                 # fast so the pidfile doesn't block other profiles
-                notify(f"'{PROFILE}' stream failed",
-                       "never connected — gave up")
+                notify(tr("notify_fail", PROFILE), tr("gaveup_body"))
                 GLib.idle_add(cleanup)
                 return
             time.sleep(5)
@@ -989,9 +1315,34 @@ def notify(summary, body):
         pass
 
 
+def pgrep_filtered(pattern):
+    """pgrep -f <pattern> minus our own processes: the orchestrator argv
+    carries the profile name and gst children carry the OSD text in argv,
+    so an unfiltered match would pin the watch to ourselves."""
+    out = subprocess.run(["pgrep", "-f", pattern],
+                         capture_output=True, text=True)
+    mine = {os.getpid(), os.getppid()}
+    if gst_proc and gst_proc.poll() is None:
+        mine.add(gst_proc.pid)
+    pids = []
+    for p in out.stdout.split():
+        try:
+            pid = int(p)
+        except ValueError:
+            continue
+        if pid in mine:
+            continue
+        try:
+            if b"stream-window" in open(f"/proc/{pid}/cmdline", "rb").read():
+                continue
+        except OSError:
+            continue
+        pids.append(p)
+    return pids
+
+
 def proc_running():
-    return subprocess.run(["pgrep", "-f", REQUIRE_PROC],
-                          stdout=subprocess.DEVNULL).returncode == 0
+    return bool(pgrep_filtered(REQUIRE_PROC))
 
 
 if REQUIRE_PROC and not proc_running() and START_CMD:
@@ -1004,9 +1355,9 @@ if REQUIRE_PROC and not proc_running() and START_CMD:
     time.sleep(2)                    # give the window a moment to map
 
 if REQUIRE_PROC and not proc_running():
-    msg = f"no running process matches '{REQUIRE_PROC}'"
+    msg = tr("no_proc", REQUIRE_PROC)
     print(f"warning: {msg} — not starting '{PROFILE}'", flush=True)
-    notify(f"'{PROFILE}' not started", msg)
+    notify(tr("notify_notstarted", PROFILE), msg)
     try:
         os.unlink(PIDFILE)
     except OSError:
@@ -1066,31 +1417,49 @@ if CROP:
 
 launch_gst(node_id, crop, win_size)
 
-# exit when the watched process disappears (e.g. screenrec tray closed)
+# stop the stream when a watched process disappears. WATCH_PROC re-matches
+# the pattern every poll; REQUIRE_PROC is pinned to the pids alive now —
+# the captured window dies with that instance, so an app restart stops the
+# stream even though a process by that name is running again
+WATCHES = [(REQUIRE_PROC, True)] if REQUIRE_PROC else []
 if WATCH_PROC:
-    def proc_pids():
-        out = subprocess.run(["pgrep", "-f", WATCH_PROC],
-                             capture_output=True, text=True)
-        return out.stdout.split()
+    WATCHES.append((WATCH_PROC, False))
 
-    def watch_proc():
-        pids = proc_pids()
+def pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+def watch_one(pattern, pinned):
+    pids = pgrep_filtered(pattern)
+    if not pids:
+        if pinned:      # require_proc died between the check and now
+            print(f"'{pattern}' already gone -> stopping stream", flush=True)
+            GLib.idle_add(cleanup)
+            return
+        print(f"waiting for '{pattern}' to start...", flush=True)
+        while not pids and not stopping.wait(2):
+            pids = pgrep_filtered(pattern)
         if not pids:
-            print(f"waiting for '{WATCH_PROC}' to start...", flush=True)
-            while not pids and not stopping.wait(2):
-                pids = proc_pids()
-            if not pids:
-                return
-            print(f"'{WATCH_PROC}' started (pids {','.join(pids)})",
-                  flush=True)
-        while not stopping.wait(2):
-            if not proc_pids():
-                print(f"'{WATCH_PROC}' exited -> stopping stream", flush=True)
-                GLib.idle_add(cleanup)
-                return
+            return
+    print(f"watching '{pattern}' (pids {','.join(pids)})"
+          + (" pinned" if pinned else ""), flush=True)
+    while not stopping.wait(2):
+        if pinned:
+            pids = [p for p in pids if pid_alive(p)]
+            gone = not pids
+        else:
+            gone = not pgrep_filtered(pattern)
+        if gone:
+            print(f"'{pattern}' exited -> stopping stream", flush=True)
+            GLib.idle_add(cleanup)
+            return
 
-    threading.Thread(target=watch_proc, daemon=True).start()
-    print(f"watching '{WATCH_PROC}'", flush=True)
+for pattern, pinned in WATCHES:
+    threading.Thread(target=watch_one, args=(pattern, pinned),
+                     daemon=True).start()
 
 GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, cleanup)
 GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, cleanup)

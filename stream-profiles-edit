@@ -17,6 +17,56 @@ from gi.repository import Gio, Gtk
 INI = os.path.expanduser(os.environ.get(
     "STREAM_PROFILES", "~/.config/stream-window/profiles.ini"))
 
+# UI language: STREAM_LANG env > ~/.config/stream-window/lang > uk
+_lang = os.environ.get("STREAM_LANG", "")
+if _lang not in ("uk", "en"):
+    try:
+        _lang = open(os.path.expanduser(
+            "~/.config/stream-window/lang")).read().strip()
+    except OSError:
+        _lang = ""
+LANG = _lang if _lang in ("uk", "en") else "uk"
+
+T = {
+    "title":       ("Stream profiles", "Профілі стріму"),
+    "name":        ("Name", "Назва"),
+    "url":         ("RTMP URL", "RTMP URL"),
+    "name_hint":   ("(name is drawn as the OSD text)",
+                    "(назва малюється як текст OSD)"),
+    "name_ph":     ("profile name = OSD text", "назва профілю = текст OSD"),
+    "advanced":    ("Advanced", "Додатково"),
+    "add":         ("Add", "Додати"),
+    "delete":      ("Delete", "Видалити"),
+    "defaults":    ("Defaults…", "Спільні…"),
+    "defaults_tt": ("Edit shared [DEFAULT] values",
+                    "Спільні значення [DEFAULT]"),
+    "save":        ("Save", "Зберегти"),
+    "save_close":  ("Save and close", "Зберегти й закрити"),
+    "saved":       ("saved %s", "збережено %s"),
+    "def_name":    ("DEFAULT (shared)", "DEFAULT (спільні)"),
+    "osd_font":    ("OSD font", "Шрифт OSD"),
+    "osd_color":   ("OSD color", "Колір OSD"),
+    "osd_outline": ("OSD outline", "Обведення OSD"),
+    "osd_outline_width": ("OSD outline width", "Товщина обведення"),
+    "osd_xpad":    ("OSD xpad", "OSD xpad"),
+    "osd_ypad":    ("OSD ypad", "OSD ypad"),
+    "crop":        ("Crop (x y w h)", "Кроп (x y w h)"),
+    "scale":       ("Scale box (W H)", "Скейл (W H)"),
+    "fps":         ("FPS", "FPS"),
+    "bitrate":     ("Bitrate kbps", "Бітрейт kbps"),
+    "trailing_slash": ("Trailing '/' on URL", "'/' вкінці URL"),
+    "watch_proc":  ("Watch process", "Стежити за процесом"),
+    "require_proc": ("Require process", "Вимагати процес"),
+    "start_cmd":   ("Start command", "Команда запуску"),
+    "encoder":     ("Encoder", "Енкодер"),
+}
+
+
+def tr(key, *args):
+    pair = T[key]
+    s = pair[0] if LANG == "en" else pair[1]
+    return s % args if args else s
+
 HEADER = """# stream-window profiles — one [section] per profile.
 #
 # [DEFAULT] is not a profile: its values apply to every profile, and any
@@ -32,13 +82,14 @@ HEADER = """# stream-window profiles — one [section] per profile.
 #   osd_xpad / osd_ypad  text padding px (default: 48 / 36)
 #   crop           "x y w h" relative to window top-left
 #   scale          fit video into "W H" box, aspect kept, no upscale
-#                  (default: 1280 720; 'off' streams the cropped size)
+#                  (default: 1920 1440; 'off' streams the cropped size)
 #   fps            frames per second (default: 24, server max)
-#   bitrate        kbps, recommended <= 2500 (default: 1800)
+#   bitrate        kbps, recommended <= 2500 (default: 2500)
 #   trailing_slash append '/' to url (default: 1 — server requires it;
 #                  never applied to '?' URLs)
-#   watch_proc     pgrep -f ERE pattern; stream exits when it dies
-#   require_proc   pgrep -f ERE pattern; warn + don't start if absent
+#   watch_proc     pgrep -f ERE pattern; stream exits when nothing matches
+#   require_proc   pgrep -f ERE pattern; warn + don't start if absent,
+#                  stream stops when that instance dies (app restart too)
 #   start_cmd      run this when require_proc is absent; wait ~15s for it
 #   encoder        auto | va | x264
 #
@@ -46,29 +97,16 @@ HEADER = """# stream-window profiles — one [section] per profile.
 #         lightgray transparent | #RGB | #RRGGBB | #RRGGBBAA | 0xAARRGGBB
 """
 
-ADV_FIELDS = [
-    ("osd_font", "OSD font"),
-    ("osd_color", "OSD color"),
-    ("osd_outline", "OSD outline"),
-    ("osd_outline_width", "OSD outline width"),
-    ("osd_xpad", "OSD xpad"),
-    ("osd_ypad", "OSD ypad"),
-    ("crop", "Crop (x y w h)"),
-    ("scale", "Scale box (W H)"),
-    ("fps", "FPS"),
-    ("bitrate", "Bitrate kbps"),
-    ("trailing_slash", "Trailing '/' on URL"),
-    ("watch_proc", "Watch process"),
-    ("require_proc", "Require process"),
-    ("start_cmd", "Start command"),
-    ("encoder", "Encoder"),
-]
-FIELDS = [("url", "RTMP URL")] + ADV_FIELDS
+ADV_KEYS = ["osd_font", "osd_color", "osd_outline", "osd_outline_width",
+            "osd_xpad", "osd_ypad", "crop", "scale", "fps", "bitrate",
+            "trailing_slash", "watch_proc", "require_proc", "start_cmd",
+            "encoder"]
+FIELDS = ["url"] + ADV_KEYS
 
 
 class Editor(Gtk.ApplicationWindow):
     def __init__(self, **kwargs):
-        super().__init__(title="Stream profiles", **kwargs)
+        super().__init__(title=tr("title"), **kwargs)
         self.set_default_size(920, 460)
         self.set_border_width(8)
         self.dirty = False
@@ -96,15 +134,15 @@ class Editor(Gtk.ApplicationWindow):
         left.pack_start(scroll, True, True, 0)
 
         btnbox = Gtk.Box(spacing=6)
-        badd = Gtk.Button(label="Add")
+        badd = Gtk.Button(label=tr("add"))
         badd.connect("clicked", self.on_add)
-        bdel = Gtk.Button(label="Delete")
+        bdel = Gtk.Button(label=tr("delete"))
         bdel.connect("clicked", self.on_del)
         btnbox.pack_start(badd, True, True, 0)
         btnbox.pack_start(bdel, True, True, 0)
         left.pack_start(btnbox, False, False, 0)
-        bdef = Gtk.Button(label="Defaults…")
-        bdef.set_tooltip_text("Edit shared [DEFAULT] values")
+        bdef = Gtk.Button(label=tr("defaults"))
+        bdef.set_tooltip_text(tr("defaults_tt"))
         bdef.connect("clicked", self.on_defaults)
         left.pack_start(bdef, False, False, 0)
         paned.pack1(left, False, False)
@@ -115,29 +153,29 @@ class Editor(Gtk.ApplicationWindow):
         self.entries = {}
 
         top = Gtk.Grid(column_spacing=8, row_spacing=6)
-        top.attach(Gtk.Label(label="Name", xalign=0), 0, 0, 1, 1)
+        top.attach(Gtk.Label(label=tr("name"), xalign=0), 0, 0, 1, 1)
         self.name_entry = Gtk.Entry()
         self.name_entry.set_hexpand(True)
-        self.name_entry.set_placeholder_text("profile name = OSD text")
+        self.name_entry.set_placeholder_text(tr("name_ph"))
         self.name_entry.connect("changed", self.on_rename)
         top.attach(self.name_entry, 1, 0, 1, 1)
-        self.url_label = Gtk.Label(label="RTMP URL", xalign=0)
+        self.url_label = Gtk.Label(label=tr("url"), xalign=0)
         top.attach(self.url_label, 0, 1, 1, 1)
         ue = Gtk.Entry()
         ue.set_hexpand(True)
         ue.connect("changed", self.on_change)
         top.attach(ue, 1, 1, 1, 1)
         self.entries["url"] = ue
-        top.attach(Gtk.Label(label="(name is drawn as the OSD text)",
+        top.attach(Gtk.Label(label=tr("name_hint"),
                              xalign=0), 0, 2, 2, 1)
         right.pack_start(top, False, True, 0)
 
-        self.exp = exp = Gtk.Expander(label="Advanced")
+        self.exp = exp = Gtk.Expander(label=tr("advanced"))
         exp.set_expanded(False)
         grid = Gtk.Grid(column_spacing=8, row_spacing=6)
         grid.set_border_width(4)
-        for i, (key, label) in enumerate(ADV_FIELDS):
-            l = Gtk.Label(label=label, xalign=0)
+        for i, key in enumerate(ADV_KEYS):
+            l = Gtk.Label(label=tr(key), xalign=0)
             e = Gtk.Entry()
             e.connect("changed", self.on_change)
             grid.attach(l, 0, i, 1, 1)
@@ -147,10 +185,10 @@ class Editor(Gtk.ApplicationWindow):
         right.pack_start(exp, True, True, 0)
 
         bbar = Gtk.Box(spacing=6)
-        bsave = Gtk.Button(label="Save")
+        bsave = Gtk.Button(label=tr("save"))
         bsave.get_style_context().add_class("suggested-action")
         bsave.connect("clicked", self.on_save)
-        bsavec = Gtk.Button(label="Save and close")
+        bsavec = Gtk.Button(label=tr("save_close"))
         bsavec.connect("clicked", self.on_save_close)
         bbar.pack_start(bsave, True, True, 0)
         bbar.pack_start(bsavec, True, True, 0)
@@ -187,7 +225,7 @@ class Editor(Gtk.ApplicationWindow):
             e.handler_unblock_by_func(self.on_change)
         is_def = name == "DEFAULT"
         self.name_entry.handler_block_by_func(self.on_rename)
-        self.name_entry.set_text("DEFAULT (shared)" if is_def else name)
+        self.name_entry.set_text(tr("def_name") if is_def else name)
         self.name_entry.set_sensitive(not is_def)
         self.name_entry.handler_unblock_by_func(self.on_rename)
         self.url_label.set_visible(not is_def)
@@ -264,7 +302,7 @@ class Editor(Gtk.ApplicationWindow):
         with open(INI, "w") as f:
             f.write("\n".join(out))
         self.dirty = False
-        self.status.set_text(f"saved {INI}")
+        self.status.set_text(tr("saved", INI))
 
     def on_save_close(self, *_):
         self.on_save()
