@@ -20,7 +20,7 @@
 #
 # Profile keys (ini): url, osd_font, osd_color, osd_outline,
 #   osd_outline_width, osd_xpad, osd_ypad, crop, bitrate,
-#   watch_proc, encoder.
+#   watch_proc, require_proc, start_cmd, encoder.
 #   The OSD text is the profile name (spaces allowed).
 #   Colors: names (white/black/...), #RGB, #RRGGBB, #RRGGBBAA,
 #   or raw 0xAARRGGBB.  A [DEFAULT] section supplies values to all
@@ -32,6 +32,11 @@
 #                          pattern dies; waits for it to appear if absent.
 #                          Example: 'screenrec$' watches the tray app while
 #                          ignoring the 'screenrec --card ...' daemon.
+#   REQUIRE_PROC=pattern   refuse to start unless a process matching this
+#                          pgrep -f ERE pattern is running; warns via a
+#                          desktop notification (visible from tray launches)
+#   START_CMD=command      if REQUIRE_PROC isn't running, run this first and
+#                          wait up to 15s for the process to appear
 #   RTMP_TRAILING_SLASH=1  append '/' to URL (never applied to '?' URLs)
 #   OSD=text OSD_FONT=... OSD_COLOR=0xAARRGGBB OSD_OUTLINE=0x...
 #   OSD_XPAD=px OSD_YPAD=px   overlay settings for ad-hoc (URL) mode
@@ -75,6 +80,8 @@ if [ ! -f "$CFG_DIR/profiles.ini" ]; then
 #   crop           "x y w h" relative to window top-left
 #   bitrate        kbps, recommended <= 2500 (default: 1800)
 #   watch_proc     pgrep -f ERE pattern; stream exits when it dies
+#   require_proc   pgrep -f ERE pattern; warn + don't start if absent
+#   start_cmd      run this when require_proc is absent; wait ~15s for it
 #   encoder        auto | va | x264
 #
 # colors: white black red green blue yellow cyan magenta orange gray
@@ -154,7 +161,7 @@ import sys
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import Gio, Gtk
 
 INI = os.path.expanduser(os.environ.get(
     "STREAM_PROFILES", "~/.config/stream-window/profiles.ini"))
@@ -175,6 +182,8 @@ HEADER = """# stream-window profiles — one [section] per profile.
 #   crop           "x y w h" relative to window top-left
 #   bitrate        kbps, recommended <= 2500 (default: 1800)
 #   watch_proc     pgrep -f ERE pattern; stream exits when it dies
+#   require_proc   pgrep -f ERE pattern; warn + don't start if absent
+#   start_cmd      run this when require_proc is absent; wait ~15s for it
 #   encoder        auto | va | x264
 #
 # colors: white black red green blue yellow cyan magenta orange gray
@@ -191,6 +200,8 @@ ADV_FIELDS = [
     ("crop", "Crop (x y w h)"),
     ("bitrate", "Bitrate kbps"),
     ("watch_proc", "Watch process"),
+    ("require_proc", "Require process"),
+    ("start_cmd", "Start command"),
     ("encoder", "Encoder"),
 ]
 FIELDS = [("url", "RTMP URL")] + ADV_FIELDS
@@ -250,7 +261,8 @@ class Editor(Gtk.Window):
         self.name_entry.set_placeholder_text("profile name = OSD text")
         self.name_entry.connect("changed", self.on_rename)
         top.attach(self.name_entry, 1, 0, 1, 1)
-        top.attach(Gtk.Label(label="RTMP URL", xalign=0), 0, 1, 1, 1)
+        self.url_label = Gtk.Label(label="RTMP URL", xalign=0)
+        top.attach(self.url_label, 0, 1, 1, 1)
         ue = Gtk.Entry()
         ue.connect("changed", self.on_change)
         top.attach(ue, 1, 1, 1, 1)
@@ -301,6 +313,7 @@ class Editor(Gtk.Window):
 
     def _load(self, name):
         self.current = name
+        self.right.show_all()
         vals = self.data.get(name, {})
         for key, e in self.entries.items():
             e.handler_block_by_func(self.on_change)
@@ -311,7 +324,8 @@ class Editor(Gtk.Window):
         self.name_entry.set_text("DEFAULT (shared)" if is_def else name)
         self.name_entry.set_sensitive(not is_def)
         self.name_entry.handler_unblock_by_func(self.on_rename)
-        self.right.show_all()
+        self.url_label.set_visible(not is_def)
+        self.entries["url"].set_visible(not is_def)
 
     def on_select(self, lb, row):
         if row is None:
@@ -387,6 +401,23 @@ class Editor(Gtk.Window):
         self.status.set_text(f"saved {INI}")
 
 
+def apply_system_theme():
+    """Use the dark GTK variant when GNOME prefers dark style."""
+    try:
+        s = Gio.Settings.new("org.gnome.desktop.interface")
+        keys = s.get_property("settings-schema").list_keys()
+        if "color-scheme" in keys:
+            dark = s.get_string("color-scheme") == "prefer-dark"
+        else:                            # GNOME < 42: no color-scheme key
+            dark = "dark" in s.get_string("gtk-theme").lower()
+        if dark:
+            Gtk.Settings.get_default().set_property(
+                "gtk-application-prefer-dark-theme", True)
+    except Exception:
+        pass
+
+
+apply_system_theme()
 win = Editor()
 win.connect("destroy", Gtk.main_quit)
 Gtk.main()
@@ -483,6 +514,7 @@ exec python3 - "$PIDFILE" "$@" <<'PYEOF'
 import configparser
 import itertools
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -565,6 +597,8 @@ if ARGS[0] == "--list":
 # ---- resolve profile or ad-hoc URL -------------------------------------
 ENCODER = os.environ.get("ENCODER", "auto")
 WATCH_PROC = os.environ.get("WATCH_PROC", "")
+REQUIRE_PROC = os.environ.get("REQUIRE_PROC", "")
+START_CMD = os.environ.get("START_CMD", "")
 TRAILING_SLASH = os.environ.get("RTMP_TRAILING_SLASH", "")
 
 if ARGS[0].startswith(("rtmp://", "rtmps://")):
@@ -595,6 +629,8 @@ else:
     OSD_YPAD = p.get("osd_ypad", "36")
     OSD_OUTLINE_W = int(p.get("osd_outline_width", "0"))
     WATCH_PROC = WATCH_PROC or p.get("watch_proc", "")
+    REQUIRE_PROC = REQUIRE_PROC or p.get("require_proc", "")
+    START_CMD = START_CMD or p.get("start_cmd", "")
     ENCODER = os.environ.get("ENCODER") or p.get("encoder", "auto")
 
 # some servers require rtmp(s)://{host}/{path}/ (trailing '/'). Never applied
@@ -781,6 +817,45 @@ def launch_gst(node_id, crop, win_size):
 
 gst_proc = None
 stopping = threading.Event()
+
+
+def notify(summary, body):
+    """Desktop notification — visible even when launched from the tray."""
+    try:
+        bus.call_sync("org.freedesktop.Notifications",
+                      "/org/freedesktop/Notifications",
+                      "org.freedesktop.Notifications", "Notify",
+                      GLib.Variant("(susssasa{sv}i)",
+                                   ("stream-window", 0, "dialog-warning",
+                                    summary, body, [], {}, 8000)),
+                      None, Gio.DBusCallFlags.NONE, 5000, None)
+    except Exception:
+        pass
+
+
+def proc_running():
+    return subprocess.run(["pgrep", "-f", REQUIRE_PROC],
+                          stdout=subprocess.DEVNULL).returncode == 0
+
+
+if REQUIRE_PROC and not proc_running() and START_CMD:
+    print(f"'{REQUIRE_PROC}' not running — starting: {START_CMD}",
+          flush=True)
+    subprocess.Popen(shlex.split(START_CMD))
+    deadline = time.time() + 15
+    while not proc_running() and time.time() < deadline:
+        time.sleep(0.5)
+    time.sleep(2)                    # give the window a moment to map
+
+if REQUIRE_PROC and not proc_running():
+    msg = f"no running process matches '{REQUIRE_PROC}'"
+    print(f"warning: {msg} — not starting '{PROFILE}'", flush=True)
+    notify(f"'{PROFILE}' not started", msg)
+    try:
+        os.unlink(PIDFILE)
+    except OSError:
+        pass
+    sys.exit(1)
 
 preflight()
 

@@ -12,7 +12,7 @@ import sys
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import Gio, Gtk
 
 INI = os.path.expanduser(os.environ.get(
     "STREAM_PROFILES", "~/.config/stream-window/profiles.ini"))
@@ -33,6 +33,8 @@ HEADER = """# stream-window profiles — one [section] per profile.
 #   crop           "x y w h" relative to window top-left
 #   bitrate        kbps, recommended <= 2500 (default: 1800)
 #   watch_proc     pgrep -f ERE pattern; stream exits when it dies
+#   require_proc   pgrep -f ERE pattern; warn + don't start if absent
+#   start_cmd      run this when require_proc is absent; wait ~15s for it
 #   encoder        auto | va | x264
 #
 # colors: white black red green blue yellow cyan magenta orange gray
@@ -49,6 +51,8 @@ ADV_FIELDS = [
     ("crop", "Crop (x y w h)"),
     ("bitrate", "Bitrate kbps"),
     ("watch_proc", "Watch process"),
+    ("require_proc", "Require process"),
+    ("start_cmd", "Start command"),
     ("encoder", "Encoder"),
 ]
 FIELDS = [("url", "RTMP URL")] + ADV_FIELDS
@@ -108,7 +112,8 @@ class Editor(Gtk.Window):
         self.name_entry.set_placeholder_text("profile name = OSD text")
         self.name_entry.connect("changed", self.on_rename)
         top.attach(self.name_entry, 1, 0, 1, 1)
-        top.attach(Gtk.Label(label="RTMP URL", xalign=0), 0, 1, 1, 1)
+        self.url_label = Gtk.Label(label="RTMP URL", xalign=0)
+        top.attach(self.url_label, 0, 1, 1, 1)
         ue = Gtk.Entry()
         ue.connect("changed", self.on_change)
         top.attach(ue, 1, 1, 1, 1)
@@ -159,6 +164,7 @@ class Editor(Gtk.Window):
 
     def _load(self, name):
         self.current = name
+        self.right.show_all()
         vals = self.data.get(name, {})
         for key, e in self.entries.items():
             e.handler_block_by_func(self.on_change)
@@ -169,7 +175,8 @@ class Editor(Gtk.Window):
         self.name_entry.set_text("DEFAULT (shared)" if is_def else name)
         self.name_entry.set_sensitive(not is_def)
         self.name_entry.handler_unblock_by_func(self.on_rename)
-        self.right.show_all()
+        self.url_label.set_visible(not is_def)
+        self.entries["url"].set_visible(not is_def)
 
     def on_select(self, lb, row):
         if row is None:
@@ -245,6 +252,23 @@ class Editor(Gtk.Window):
         self.status.set_text(f"saved {INI}")
 
 
+def apply_system_theme():
+    """Use the dark GTK variant when GNOME prefers dark style."""
+    try:
+        s = Gio.Settings.new("org.gnome.desktop.interface")
+        keys = s.get_property("settings-schema").list_keys()
+        if "color-scheme" in keys:
+            dark = s.get_string("color-scheme") == "prefer-dark"
+        else:                            # GNOME < 42: no color-scheme key
+            dark = "dark" in s.get_string("gtk-theme").lower()
+        if dark:
+            Gtk.Settings.get_default().set_property(
+                "gtk-application-prefer-dark-theme", True)
+    except Exception:
+        pass
+
+
+apply_system_theme()
 win = Editor()
 win.connect("destroy", Gtk.main_quit)
 Gtk.main()
