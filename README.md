@@ -25,7 +25,7 @@ curl -L --create-dirs -o ~/.local/bin/stream-window \
 Self-installed into `~/.local/bin` and `~/.config`:
 `profiles.ini` (profile config — created once, never overwritten),
 `stream-profiles-edit` (GTK editor), `stream-reset`, and — only if the
-Argos extension is installed — `~/.config/argos/stream.r.2s.sh` (tray
+Argos extension is installed — `~/.config/argos/stream.r.1s.sh` (tray
 widget). Support files are updated automatically whenever the embedded
 copies change — upgrading is just replacing `stream-window`.
 

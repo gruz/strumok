@@ -231,10 +231,10 @@ if [ "$ALL" = 1 ]; then
         rm -f "$KEPT"
         t kept "$INI"
     fi
-    rm -f "$HOME/.config/argos/stream.r.2s.sh"
+    rm -f "$HOME/.config/argos/stream.r.1s.sh" "$HOME/.config/argos/stream.r.2s.sh"
     rm -f "$HOME/.local/bin/stream-window" "$HOME/.local/bin/stream-profiles-edit"
     rm -f "$HOME/.local/bin/stream-reset"
-    pkill -f 'stream\.r\.2s\.sh' 2>/dev/null
+    pkill -f 'stream\.r\.[12]s\.sh' 2>/dev/null
     # deleting the file isn't enough — argos keeps the tray entry until
     # the extension rescans; disable+enable forces it (other widgets return)
     for ext in $(gnome-extensions list 2>/dev/null | grep -i argos); do

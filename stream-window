@@ -60,7 +60,7 @@
 # Server-doc defaults: 1800 kbps (<= 2500 max), 24 fps, scaled to fit
 # 1280x720, x264 veryfast, GOP = 2*fps, bframes=0, rtmp2sink, '/'.
 #
-# Tray: while streaming, ~/.config/argos/stream.r.2s.sh shows the active
+# Tray: while streaming, ~/.config/argos/stream.r.1s.sh shows the active
 # profile from $XDG_RUNTIME_DIR/stream-window.state.
 #
 # Stop: kill $(cat /run/user/1000/stream-window.pid)
@@ -162,8 +162,11 @@ osd_ypad = 32
 INI_EOF
 fi
 
-ARGOS="$HOME/.config/argos/stream.r.2s.sh"
+ARGOS="$HOME/.config/argos/stream.r.1s.sh"
 if [ -d "$HOME/.config/argos" ]; then
+    # migrated from the 2s refresh cycle — drop the old widget or both
+    # would show in the tray (argos interval comes from the filename)
+    rm -f "$HOME/.config/argos/stream.r.2s.sh"
     install_file "$ARGOS" exec <<'ARGOS_EOF'
 #!/bin/sh
 # Argos widget: shows which stream-window profile is streaming.
@@ -851,10 +854,10 @@ if [ "$ALL" = 1 ]; then
         rm -f "$KEPT"
         t kept "$INI"
     fi
-    rm -f "$HOME/.config/argos/stream.r.2s.sh"
+    rm -f "$HOME/.config/argos/stream.r.1s.sh" "$HOME/.config/argos/stream.r.2s.sh"
     rm -f "$HOME/.local/bin/stream-window" "$HOME/.local/bin/stream-profiles-edit"
     rm -f "$HOME/.local/bin/stream-reset"
-    pkill -f 'stream\.r\.2s\.sh' 2>/dev/null
+    pkill -f 'stream\.r\.[12]s\.sh' 2>/dev/null
     # deleting the file isn't enough — argos keeps the tray entry until
     # the extension rescans; disable+enable forces it (other widgets return)
     for ext in $(gnome-extensions list 2>/dev/null | grep -i argos); do
