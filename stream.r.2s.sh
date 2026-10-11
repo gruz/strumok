@@ -68,9 +68,9 @@ if [ -x "$RST" ]; then
     echo "---"
     # top-level, not '--' nested: the 2s refresh rebuilds the menu and
     # collapses expanded submenus — nested items are unusable
-    echo "$(t r_reset) | bash='$RST --reset' terminal=true refresh=true size=10 color=#888888"
-    echo "$(t r_backup) | bash='$RST --all' terminal=true refresh=true size=10 color=#888888"
-    echo "$(t r_keep) | bash='$RST --all --keep-profiles' terminal=true refresh=true size=10 color=#888888"
+    echo "$(t r_reset) | bash='$RST --reset' terminal=false refresh=true size=10 color=#888888"
+    echo "$(t r_backup) | bash='$RST --all' terminal=false refresh=true size=10 color=#888888"
+    echo "$(t r_keep) | bash='$RST --all --keep-profiles' terminal=false refresh=true size=10 color=#888888"
 fi
 CFG_DIR=$(dirname "$LANG_FILE")
 if [ "$L" = uk ]; then
