@@ -32,8 +32,8 @@ t() {
         uk:noprof)    echo "немає profiles.ini" ;;
         en:edit)      echo "Edit profiles…" ;;
         uk:edit)      echo "Редагувати профілі…" ;;
-        en:update)    echo "Update version…" ;;
-        uk:update)    echo "Оновити версію…" ;;
+        en:update)    echo "update…" ;;
+        uk:update)    echo "оновити…" ;;
         en:resetmenu) echo "reset / uninstall" ;;
         uk:resetmenu) echo "скидання / видалення" ;;
         en:r_reset)   echo "Reset stream state…" ;;
@@ -80,9 +80,10 @@ else
     fi
 fi
 [ -x "$EDIT" ] && echo "$(t edit) | bash='$EDIT' terminal=false"
-# the same one-liner as in README "Install": fetch latest stream-window,
-# chmod, run it once — self-install then updates all helper files
-echo "$(t update) | bash='curl -L --create-dirs -o $HOME/.local/bin/stream-window \"https://raw.githubusercontent.com/gruz/strumok/master/stream-window?v=\$(date +%s)\" && chmod +x $HOME/.local/bin/stream-window && $HOME/.local/bin/stream-window --list' terminal=true refresh=true"
+# one merged item: shows the installed version, click self-updates from
+# GitHub master and reports the result via a desktop notification
+# (no tty needed, so it works on machines without gnome-terminal)
+echo "stream-window v${VER:-?} — $(t update) | bash='$HOME/.local/bin/stream-window --self-update' terminal=false refresh=true"
 if [ -x "$RST" ]; then
     echo "---"
     # top-level, not '--' nested: the 2s refresh rebuilds the menu and
@@ -97,5 +98,5 @@ if [ "$L" = uk ]; then
 else
     echo "$(t lang) → Українська | bash='mkdir -p \"$CFG_DIR\" && echo uk > \"$LANG_FILE\"' terminal=false refresh=true"
 fi
-[ -n "$VER" ] && echo "stream-window v$VER | font=monospace size=10 color=#888888 href=https://github.com/gruz/strumok"
+
 exit 0
