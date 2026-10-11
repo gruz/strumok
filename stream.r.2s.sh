@@ -20,6 +20,8 @@ t() {
     case "$L:$1" in
         en:streaming) echo "● STREAM" ;;
         uk:streaming) echo "● СТРІМ" ;;
+        en:starting)  echo "◌ START…" ;;
+        uk:starting)  echo "◌ СТАРТ…" ;;
         en:stop)      echo "Stop stream" ;;
         uk:stop)      echo "Зупинити стрім" ;;
         en:off)       echo "stream: off" ;;
@@ -45,8 +47,25 @@ t() {
     esac
 }
 
-if [ -s "$STATE" ]; then
-    echo "$(t streaming): $(cat "$STATE") | color=#ff3333 font=monospace"
+# state file holds either "starting:<profile>" (pipeline not up yet) or
+# the bare profile name (confirmed streaming); a live pidfile is required
+# so a crashed run never leaves a stuck state in the tray
+S=""; [ -f "$STATE" ] && S=$(cat "$STATE")
+PID=$(cat "$RTD/stream-window.pid" 2>/dev/null)
+ALIVE=0; [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && ALIVE=1
+
+if [ "$ALIVE" = 1 ] && { [ -n "$S" ] || [ -n "$PID" ]; }; then
+    if [ -z "$S" ]; then
+        # tiny gap: pidfile exists, python hasn't written state yet —
+        # take the profile name from the process argv
+        S="starting:$(tr '\0' '\n' < /proc/$PID/cmdline 2>/dev/null | tail -1)"
+    fi
+    case "$S" in
+        starting:*)
+            echo "$(t starting): ${S#starting:} | color=#ffbb33 font=monospace" ;;
+        *)
+            echo "$(t streaming): $S | color=#ff3333 font=monospace" ;;
+    esac
     echo "---"
     echo "$(t stop) | bash='kill \$(cat $RTD/stream-window.pid)' terminal=false refresh=true"
 else
