@@ -50,8 +50,10 @@ profiles.
 Defaults follow the server doc: 24 fps, GOP = 2*fps, B-frames off,
 rtmp2sink, a trailing '/' is appended to RTMP URLs automatically
 (`trailing_slash = 0` or `RTMP_TRAILING_SLASH=0` disables). Output is
-scaled to fit 1920x1440 at 2500 kbps — tune `scale`, `fps`, `bitrate`
-per profile (`scale = off` disables scaling).
+scaled to fit 1280x720 at 1800 kbps — tune `scale`, `fps`, `bitrate`
+per profile (`scale = off` disables scaling). See [PERF.md](PERF.md)
+for the load analysis and which "optimizations" were already tried
+and rejected.
 
 ## Run
 

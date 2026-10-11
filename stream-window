@@ -1,5 +1,5 @@
 #!/usr/bin/env nix-shell
-#!nix-shell -i bash -p "python3.withPackages (ps: [ ps.pygobject3 ])" gobject-introspection glib gst_all_1.gstreamer gst_all_1.gst-plugins-base gst_all_1.gst-plugins-good gst_all_1.gst-plugins-bad gst_all_1.gst-plugins-ugly pipewire glib-networking
+#!nix-shell -i bash -p "python3.withPackages (ps: [ ps.pygobject3 ])" gobject-introspection glib gst_all_1.gstreamer gst_all_1.gst-plugins-base gst_all_1.gst-plugins-good gst_all_1.gst-plugins-bad gst_all_1.gst-plugins-ugly gst_all_1.gst-vaapi pipewire glib-networking
 #
 # Stream a specific window to RTMP(S) on GNOME/Wayland via the xdg-desktop-portal
 # ScreenCast API (shows a picker dialog once; selection is persisted).
@@ -65,7 +65,7 @@
 #
 # Stop: kill $(cat /run/user/1000/stream-window.pid)
 
-VERSION="0.1.5"
+VERSION="0.1.6"
 
 set -euo pipefail
 
@@ -681,6 +681,8 @@ t() {
         uk:done_all)  s='готово — повне видалення завершено' ;;
         en:done_soft) s='done — fresh-machine state; script/config/widget kept' ;;
         uk:done_soft) s='готово — стан чистої машини; скрипт/конфіг/віджет лишились' ;;
+        en:nixgc)     s='note: packages fetched via nix-shell stay in /nix/store; free them with: nix-collect-garbage -d' ;;
+        uk:nixgc)     s='примітка: пакети, докачані nix-shell, лишаються в /nix/store; звільни їх: nix-collect-garbage -d' ;;
     esac
     if [ $# -gt 0 ]; then printf "$s\n" "$@"; else printf '%s\n' "$s"; fi
 }
@@ -828,6 +830,7 @@ if [ "$ALL" = 1 ]; then
         gnome-extensions enable "$ext" 2>/dev/null
     done
     t done_all
+    t nixgc
 else
     echo "[5/5] $(t done_soft)"
 fi
@@ -1160,11 +1163,13 @@ def pick_encoder():
     if ENCODER == "x264":
         return "x264"
     if ENCODER in ("auto", "va"):
-        if (have_element("vah264lpenc") and have_element("vapostproc")
-                and os.path.isdir("/run/opengl-driver")):
+        # /run/opengl-driver only exists on NixOS; on normal distros libva
+        # finds the driver itself, so the elements alone are enough
+        if have_element("vah264lpenc") and have_element("vapostproc"):
             return "va"
         if ENCODER == "va":
-            print("warning: vah264lpenc/driver unavailable, using x264", flush=True)
+            print("warning: vah264lpenc/vapostproc unavailable, using x264",
+                  flush=True)
     return "x264"
 
 
@@ -1236,8 +1241,9 @@ def launch_gst(node_id, crop, win_size):
                f"outline-color={OSD_OUTLINE}",
                f"color={OSD_COLOR}", "draw-shadow=true"]
     env = dict(os.environ)
-    if enc == "va":
-        env["LIBVA_DRIVER_NAME"] = "iHD"
+    if enc == "va" and os.path.isdir("/run/opengl-driver/lib/dri"):
+        # NixOS keeps the VA-API driver outside the default search path;
+        # no LIBVA_DRIVER_NAME so libva auto-detects (iHD, radeonsi, ...)
         env["LIBVA_DRIVERS_PATH"] = "/run/opengl-driver/lib/dri"
         pl += ["!", f"video/x-raw,format=NV12,framerate={FPS}/1",
                "!", "queue", "max-size-buffers=8", "leaky=downstream",

@@ -80,6 +80,8 @@ t() {
         uk:done_all)  s='готово — повне видалення завершено' ;;
         en:done_soft) s='done — fresh-machine state; script/config/widget kept' ;;
         uk:done_soft) s='готово — стан чистої машини; скрипт/конфіг/віджет лишились' ;;
+        en:nixgc)     s='note: packages fetched via nix-shell stay in /nix/store; free them with: nix-collect-garbage -d' ;;
+        uk:nixgc)     s='примітка: пакети, докачані nix-shell, лишаються в /nix/store; звільни їх: nix-collect-garbage -d' ;;
     esac
     if [ $# -gt 0 ]; then printf "$s\n" "$@"; else printf '%s\n' "$s"; fi
 }
@@ -227,6 +229,7 @@ if [ "$ALL" = 1 ]; then
         gnome-extensions enable "$ext" 2>/dev/null
     done
     t done_all
+    t nixgc
 else
     echo "[5/5] $(t done_soft)"
 fi
