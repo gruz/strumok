@@ -17,7 +17,7 @@ so it takes a while):
 
 ```sh
 curl -L --create-dirs -o ~/.local/bin/stream-window \
-  "https://raw.githubusercontent.com/gruz/strumok/master/stream-window?v=$(date +%s)" \
+  "https://raw.githubusercontent.com/gruz/strumok/master/stream-window" \
   && chmod +x ~/.local/bin/stream-window \
   && ~/.local/bin/stream-window --list
 ```

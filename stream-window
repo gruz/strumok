@@ -892,7 +892,7 @@ case "${1:-}" in
         exec bash -c '
             t="$0"; ok="$1"; fail="$2"
             u="https://raw.githubusercontent.com/gruz/strumok/master/stream-window"
-            if curl -fsSL --create-dirs -o "$t.new" "$u?v=$(date +%s)" \
+            if curl -fsSL --create-dirs -o "$t.new" "$u" \
                && chmod +x "$t.new" && mv "$t.new" "$t" \
                && "$t" --list >/dev/null 2>&1; then
                 v=$("$t" --version | grep -oE "[0-9][0-9.]*")
