@@ -192,10 +192,12 @@ class Editor(Gtk.ApplicationWindow):
         bsavec.connect("clicked", self.on_save_close)
         bbar.pack_start(bsave, True, True, 0)
         bbar.pack_start(bsavec, True, True, 0)
-        right.pack_end(bbar, False, False, 0)
         self.status = Gtk.Label(label="", xalign=0)
-        right.pack_end(self.status, False, False, 0)
-        paned.pack2(right, True, False)
+        wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        wrap.pack_start(right, True, True, 0)
+        wrap.pack_end(bbar, False, False, 0)
+        wrap.pack_end(self.status, False, False, 0)
+        paned.pack2(wrap, True, False)
         self.right = right
 
         for name in self.data:
@@ -288,7 +290,11 @@ class Editor(Gtk.ApplicationWindow):
         del self.data[row._name]
         self.listbox.remove(row)
         self.current = None
-        self.right.hide()
+        rows = self.listbox.get_children()
+        if rows:
+            self.listbox.select_row(rows[0])
+        else:
+            self.right.hide()
         self.dirty = True
 
     def on_save(self, *_):
