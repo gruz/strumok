@@ -17,7 +17,16 @@ so it takes a while):
 
 ```sh
 curl -L --create-dirs -o ~/.local/bin/stream-window \
-  "https://raw.githubusercontent.com/gruz/strumok/master/stream-window" \
+  "https://github.com/gruz/strumok/releases/latest/download/stream-window" \
+  && chmod +x ~/.local/bin/stream-window \
+  && ~/.local/bin/stream-window --list
+```
+
+To install a specific version, replace `latest` with the tag:
+
+```sh
+curl -L --create-dirs -o ~/.local/bin/stream-window \
+  "https://github.com/gruz/strumok/releases/download/v0.1.8/stream-window" \
   && chmod +x ~/.local/bin/stream-window \
   && ~/.local/bin/stream-window --list
 ```
@@ -87,3 +96,24 @@ stream-reset --all --keep-profiles      # uninstall but keep profiles.ini
 Every mode asks for a typed `yes` on a terminal (or refuses without one);
 `-y`/`--yes` skips the prompt for scripts. The tray widget has the same
 actions under "reset / uninstall".
+
+## Releases
+
+Releases are Git tags named `v<major>.<minor>.<patch>`. The README install
+command uses the `stream-window` asset attached to the latest GitHub Release,
+so the initial install is deterministic (no stale CDN content). The tray menu's
+**update** item uses the release's tag to download the same files.
+
+To make a release, bump `VERSION` in `stream-window`, commit, then create and
+push a tag:
+
+```sh
+git tag -a v0.1.8 -m "stream-window v0.1.8"
+git push origin v0.1.8
+```
+
+Then attach the main script as a release asset (required for the install URL):
+
+```sh
+gh release create v0.1.8 --title "stream-window v0.1.8" --generate-notes stream-window
+```

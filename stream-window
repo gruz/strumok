@@ -65,7 +65,7 @@
 #
 # Stop: kill $(cat /run/user/1000/stream-window.pid)
 
-VERSION="0.1.7"
+VERSION="0.1.8"
 
 set -euo pipefail
 
@@ -182,6 +182,8 @@ EDIT="$HOME/.local/bin/stream-profiles-edit"
 RST="$HOME/.local/bin/stream-reset"
 LANG_FILE="$HOME/.config/stream-window/lang"
 VER=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$HOME/.local/bin/stream-window" 2>/dev/null | head -1)
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/stream-window"
+STATUS_FILE="$CACHE_DIR/update-status"
 
 L="${STREAM_LANG:-$(cat "$LANG_FILE" 2>/dev/null)}"
 [ "$L" = "en" ] || L="uk"
@@ -204,6 +206,8 @@ t() {
         uk:edit)      echo "Редагувати профілі…" ;;
         en:update)    echo "update…" ;;
         uk:update)    echo "оновити…" ;;
+        en:newver)    echo "↳ %s available" ;;
+        uk:newver)    echo "↳ %s доступна" ;;
         en:resetmenu) echo "reset / uninstall" ;;
         uk:resetmenu) echo "скидання / видалення" ;;
         en:r_reset)   echo "Reset stream state…" ;;
@@ -216,6 +220,19 @@ t() {
         uk:lang)      echo "Мова: Українська" ;;
     esac
 }
+
+# background update check: at most once per hour; lock file prevents a burst
+# of Argos refreshes from spawning many curls
+if [ ! -f "$STATUS_FILE" ] || [ -n "$(find "$STATUS_FILE" -mmin +60 2>/dev/null)" ]; then
+    if [ ! -f "$CACHE_DIR/update-check.lock" ]; then
+        stream-window --check-update >/dev/null 2>&1 &
+    fi
+fi
+UPD=""
+if [ -f "$STATUS_FILE" ]; then
+    read _utype _utag _ < "$STATUS_FILE"
+    [ "$_utype" = "AVAILABLE" ] && UPD="$_utag"
+fi
 
 # state file holds either "starting:<profile>" (pipeline not up yet) or
 # the bare profile name (confirmed streaming); a live pidfile is required
@@ -251,9 +268,12 @@ else
 fi
 [ -x "$EDIT" ] && echo "$(t edit) | bash='$EDIT' terminal=false"
 # one merged item: shows the installed version, click self-updates from
-# GitHub master and reports the result via a desktop notification
+# the latest GitHub release and reports the result via a desktop notification
 # (no tty needed, so it works on machines without gnome-terminal)
 echo "stream-window v${VER:-?} — $(t update) | bash='$HOME/.local/bin/stream-window --self-update' terminal=false refresh=true"
+if [ -n "$UPD" ]; then
+    printf "$(t newver)\n" "$UPD" | sed 's/$/ | color=#4da6ff font=monospace refresh=true/'
+fi
 if [ -x "$RST" ]; then
     echo "---"
     # top-level, not '--' nested: the 2s refresh rebuilds the menu and
@@ -887,31 +907,76 @@ PIDFILE="${XDG_RUNTIME_DIR:-/tmp}/stream-window.pid"
 case "${1:-}" in
     --edit) exec "$BIN_DIR/stream-profiles-edit" ;;
     --version|-V) echo "stream-window $VERSION"; exit 0 ;;
+    --check-update)
+        # synchronous check; the caller (e.g. the Argos widget) backgrounds us
+        # writes ~/.cache/stream-window/update-status as UPTODATE/AVAILABLE/UNKNOWN
+        CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/stream-window"
+        LOCK="$CACHE_DIR/update-check.lock"
+        mkdir -p "$CACHE_DIR"
+        # if another check is running, do nothing
+        if [ -f "$LOCK" ]; then
+            lpid=$(cat "$LOCK" 2>/dev/null)
+            [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null && exit 0
+        fi
+        echo $$ > "$LOCK"
+        repo="gruz/strumok"
+        now_tag="v$VERSION"
+        latest=$(curl -fsSL --max-time 10 "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null \
+            | python3 -c "import sys,json; data=sys.stdin.read().strip(); d=json.loads(data) if data else {}; print(d.get('tag_name',''))") || true
+        if [ -z "$latest" ]; then
+            echo "UNKNOWN -" > "$CACHE_DIR/update-status"
+        elif [ "$latest" = "$now_tag" ]; then
+            echo "UPTODATE $latest" > "$CACHE_DIR/update-status"
+        else
+            higher=$(printf '%s\n%s\n' "$now_tag" "$latest" | sort -V | tail -1)
+            if [ "$higher" = "$latest" ]; then
+                echo "AVAILABLE $latest" > "$CACHE_DIR/update-status"
+            else
+                echo "UPTODATE $latest" > "$CACHE_DIR/update-status"
+            fi
+        fi
+        rm -f "$LOCK"
+        exit 0 ;;
     --self-update)
         # runs detached (exec): the running script file gets replaced, so
         # bash must not keep parsing it; result is reported via a desktop
         # notification since menu clicks have no tty
         case "$L" in
-            uk) OK="оновлено до v%s" ; FAIL="не вдалося оновити — див. журнал" ;;
-            *)  OK="updated to v%s"  ; FAIL="update failed — check the log" ;;
+            uk) OK="оновлено до v%s" ; SAME="вже актуальна v%s" ; FAIL="не вдалося оновити — див. журнал" ;;
+            *)  OK="updated to v%s"  ; SAME="already up-to-date v%s" ; FAIL="update failed — check the log" ;;
         esac
         exec bash -c '
-            t="$0"; ok="$1"; fail="$2"
-            u="https://raw.githubusercontent.com/gruz/strumok/master/stream-window"
-            if curl -fsSL --create-dirs -o "$t.new" "$u" \
-               && chmod +x "$t.new" && mv "$t.new" "$t" \
-               && "$t" --list >/dev/null 2>&1; then
-                v=$("$t" --version | grep -oE "[0-9][0-9.]*")
-                body=$(printf "$ok" "${v:-?}"); icon=dialog-information
+            t="$0"; ok="$1"; same="$2"; fail="$3"
+            repo="gruz/strumok"
+            now=$(sed -n "s/^VERSION=\"\\(.*\\)\"$/\\1/p" "$t" | head -1)
+            now_tag="v${now:-unknown}"
+            if [ -n "${STREAM_WINDOW_TAG:-}" ]; then
+                latest="$STREAM_WINDOW_TAG"
             else
-                rm -f "$t.new"; body="$fail"; icon=dialog-error
+                api="https://api.github.com/repos/$repo/releases/latest"
+                latest=$(curl -fsSL --max-time 10 "$api" 2>/dev/null \
+                    | python3 -c "import sys,json; data=sys.stdin.read().strip(); d=json.loads(data) if data else {}; print(d.get('tag_name',''))" | head -1) || true
+                [ -z "$latest" ] && latest="master"
+            fi
+            if [ "$latest" != "master" ] && [ "$latest" = "$now_tag" ]; then
+                body=$(printf "$same" "$now"); icon=dialog-information
+            else
+                u="https://raw.githubusercontent.com/$repo/$latest/stream-window"
+                if curl -fsSL --create-dirs -o "$t.new" "$u" \
+                   && chmod +x "$t.new" && mv "$t.new" "$t" \
+                   && "$t" --list >/dev/null 2>&1; then
+                    v=$("$t" --version | grep -oE "[0-9][0-9.]*")
+                    body=$(printf "$ok" "${v:-?}"); icon=dialog-information
+                else
+                    rm -f "$t.new"; body="$fail"; icon=dialog-error
+                fi
             fi
             gdbus call --session --dest org.freedesktop.Notifications \
                 --object-path /org/freedesktop/Notifications \
                 --method org.freedesktop.Notifications.Notify \
                 stream-window 0 "$icon" stream-window "$body" "[]" "{}" 6000 \
                 >/dev/null 2>&1
-        ' "$BIN_DIR/stream-window" "$OK" "$FAIL" ;;
+        ' "$BIN_DIR/stream-window" "$OK" "$SAME" "$FAIL" ;;
 esac
 case "${1:-}" in
     ""|-h|--help|--list) ;;          # python handles these

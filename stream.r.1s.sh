@@ -12,6 +12,8 @@ EDIT="$HOME/.local/bin/stream-profiles-edit"
 RST="$HOME/.local/bin/stream-reset"
 LANG_FILE="$HOME/.config/stream-window/lang"
 VER=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$HOME/.local/bin/stream-window" 2>/dev/null | head -1)
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/stream-window"
+STATUS_FILE="$CACHE_DIR/update-status"
 
 L="${STREAM_LANG:-$(cat "$LANG_FILE" 2>/dev/null)}"
 [ "$L" = "en" ] || L="uk"
@@ -34,6 +36,8 @@ t() {
         uk:edit)      echo "Редагувати профілі…" ;;
         en:update)    echo "update…" ;;
         uk:update)    echo "оновити…" ;;
+        en:newver)    echo "↳ %s available" ;;
+        uk:newver)    echo "↳ %s доступна" ;;
         en:resetmenu) echo "reset / uninstall" ;;
         uk:resetmenu) echo "скидання / видалення" ;;
         en:r_reset)   echo "Reset stream state…" ;;
@@ -46,6 +50,19 @@ t() {
         uk:lang)      echo "Мова: Українська" ;;
     esac
 }
+
+# background update check: at most once per hour; lock file prevents a burst
+# of Argos refreshes from spawning many curls
+if [ ! -f "$STATUS_FILE" ] || [ -n "$(find "$STATUS_FILE" -mmin +60 2>/dev/null)" ]; then
+    if [ ! -f "$CACHE_DIR/update-check.lock" ]; then
+        stream-window --check-update >/dev/null 2>&1 &
+    fi
+fi
+UPD=""
+if [ -f "$STATUS_FILE" ]; then
+    read _utype _utag _ < "$STATUS_FILE"
+    [ "$_utype" = "AVAILABLE" ] && UPD="$_utag"
+fi
 
 # state file holds either "starting:<profile>" (pipeline not up yet) or
 # the bare profile name (confirmed streaming); a live pidfile is required
@@ -81,9 +98,12 @@ else
 fi
 [ -x "$EDIT" ] && echo "$(t edit) | bash='$EDIT' terminal=false"
 # one merged item: shows the installed version, click self-updates from
-# GitHub master and reports the result via a desktop notification
+# the latest GitHub release and reports the result via a desktop notification
 # (no tty needed, so it works on machines without gnome-terminal)
 echo "stream-window v${VER:-?} — $(t update) | bash='$HOME/.local/bin/stream-window --self-update' terminal=false refresh=true"
+if [ -n "$UPD" ]; then
+    printf "$(t newver)\n" "$UPD" | sed 's/$/ | color=#4da6ff font=monospace refresh=true/'
+fi
 if [ -x "$RST" ]; then
     echo "---"
     # top-level, not '--' nested: the 2s refresh rebuilds the menu and
